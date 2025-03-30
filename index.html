@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Accumulator Temp Visualization</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+
+    canvas#bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: -1;
+    }
+
+    #controls {
+      position: absolute;
+      top: 5px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      border-radius: 8px;
+      font-family: sans-serif;
+      font-size: 10px;
+    }
+
+    /* Include in a <style> tag or external stylesheet */
+    span.arrow {
+      display: inline-block;
+      transition: transform 0.2s;
+    }
+
+    .expandable-header {
+      display: flex;
+      align-items: center;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    
+    .expandable-arrow {
+      display: inline-block;
+      transition: transform 0.2s ease;
+      margin-right: 6px;
+    }
+    
+
+    #graphs {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      border-radius: 8px;
+      font-family: sans-serif;
+    }
+
+    input[type="range"] {
+      width: 200px;
+    }
+
+    
+  </style>
+</head>
+<body>
+  <canvas id="bg"></canvas>
+  <script src="bundle.js"></script>
+</body>
+</html>
