@@ -23,10 +23,12 @@ import { getRelativePosition } from 'chart.js/helpers';
 import {Colors} from 'chart.js'
 Chart.register(Colors);
 
+import { Delaunay } from 'd3-delaunay'; // Add this to your import section (include `d3-delaunay` via a script tag or npm if bundling)
+
 // :)
 const planets = false;
-let selectedChartSensors = new Set();
 
+let selectedChartSensors = new Set();
 let xyCanvas = null;
 
 /*---------- random helper functions ----------*/
@@ -53,14 +55,43 @@ function rgbToHex(r, g, b) {
   return parseInt(r.toString(16).padStart(2, '0') + g.toString(16).padStart(2, '0') + b.toString(16).padStart(2, '0'), 16);
 }
 
+function latLonToXZ(lat, lon, baseLat, baseLon) {
+  const earthRadius = 6371000; // meters
+  const dLat = (lat - baseLat) * Math.PI / 180;
+  const dLon = (lon - baseLon) * Math.PI / 180;
+
+  const x = earthRadius * dLon * Math.cos(baseLat * Math.PI / 180);
+  const z = -earthRadius * dLat; // invert so north is negative z
+
+  return { x, z };
+}
+
 /*---------- ThreeJS section ----------*/
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+const container = document.getElementById("threejs-container");
+const camera = new THREE.PerspectiveCamera(
+  75,
+  container.clientWidth / container.clientHeight,
+  0.1,
+  5000
+);
+
 const gltfLoader = new GLTFLoader();
 const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector("#bg") });
 
 renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setSize(
+  document.getElementById("threejs-container").clientWidth,
+  document.getElementById("threejs-container").clientHeight
+);
+window.addEventListener("resize", () => {
+  const container = document.getElementById("threejs-container");
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+});
+
+
 camera.position.set(20, 30, 20);
 camera.lookAt(new THREE.Vector3(0, 0, 0));
 
@@ -75,6 +106,7 @@ scene.add(directionalLight);
 
 // SR-25 accumulator model
 const accumulatorModel = 'accumulator.gltf';
+const chassisModel = 'chassis.gltf'
 
 /**
  * loads a gltf model into the scene
@@ -86,17 +118,40 @@ const accumulatorModel = 'accumulator.gltf';
  * @param {number} [scaleY=1] - y scale of 3d model
  * @param {number} [scaleZ=1] - z scale of 3d model
 */
-function load3D(modelPath, posX=0, posY=0, posZ=0, scaleX=1, scaleY=1, scaleZ=1) {
+let chassisMesh = null; // global
+function load3D(modelPath, posX = 0, posY = 0, posZ = 0, scaleX = 1, scaleY = 1, scaleZ = 1) {
   gltfLoader.load(modelPath, gltf => {
     const model = gltf.scene;
     model.scale.set(scaleX, scaleY, scaleZ);
     model.position.set(posX, posY, posZ);
-    scene.add(model);
+    accGroup.add(model);
+    modelGroup.add(model);
+
+    if (modelPath === chassisModel) {
+      chassisMesh = model; // store reference
+    }
   }, undefined, error => console.error(error));
 }
 
+
 const accPlanesArray = Array(20).fill().map(() => Array(5).fill(null));
 const accTextSprites = Array(20).fill().map(() => Array(5).fill(null));
+
+let accGroup = new THREE.Group(); // Holds model and planes
+let modelGroup = new THREE.Group();
+accGroup.add(modelGroup);
+let gpsLatKey = null;
+let gpsLonKey = null;
+let baseLat = 0;
+let baseLon = 0;
+let targetPosition = new THREE.Vector3();
+let trackOffset = new THREE.Vector3(0, 0, 0);
+let cameraOffset = new THREE.Vector3();
+let cameraOffsetFromAcc = new THREE.Vector3(0, 40, 80); // initial offset
+
+const carModelScale = 0.03;
+const TRACK_SCALE = 10;
+scene.add(accGroup);
 
 function createTextTexture(message) {
   const canvas = document.createElement("canvas");
@@ -105,7 +160,8 @@ function createTextTexture(message) {
   const ctx = canvas.getContext("2d");
 
   // Text
-  ctx.fillStyle = "grey";
+  ctx.clearRect(0, 0, canvas.width, canvas.height); // clear to transparent
+  ctx.fillStyle = "rgba(255, 255, 255, 1)"; // white text
   ctx.font = "bold 28px Arial";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -143,20 +199,23 @@ function createPlanes() {
   const gridSquareSize = 20;
   for (let r = 0; r < 16; r++) {
     for (let c = 0; c < 5; c++) {
-      const planeGeometry = new THREE.PlaneGeometry(gridSquareSize * 3, gridSquareSize * 1);
-      const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+      const planeGeometry = new THREE.PlaneGeometry(gridSquareSize * 3 * carModelScale, gridSquareSize * 1 * carModelScale);
+      const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
       const planeMesh = new THREE.Mesh(planeGeometry, planeMaterial);
       planeMesh.rotation.x = degToRad(-90);
-      planeMesh.position.set((c * 70) + 30, 200, -(r * 32) - (10 + ((r + 1 % 2) * r / 50)));
+      planeMesh.position.set(((c * 70) + 30) * carModelScale, 198 * carModelScale, (-(r * 32) - (10 + ((r + 1 % 2) * r / 50))) * carModelScale);
       planeMesh.userData.index = { r, c };
-      scene.add(planeMesh);
+      accGroup.add(planeMesh);
+      modelGroup.add(planeMesh);
+
       accPlanesArray[r][c] = planeMesh;
 
       const spriteMaterial = new THREE.SpriteMaterial({ map: createTextTexture("...") });
       const sprite = new THREE.Sprite(spriteMaterial);
-      sprite.scale.set(100, 40, 1); // scale up text
-      sprite.position.set((c * 70) + 30, 202, -(r * 32) - (10 + ((r + 1 % 2) * r / 50)));
-      scene.add(sprite);
+      sprite.scale.set(100 * carModelScale, 40 * carModelScale, 1 * carModelScale);
+      sprite.position.set(((c * 70) + 30) * carModelScale, 202.5 * carModelScale, (-(r * 32) - (10 + ((r + 1 % 2) * r / 50))) * carModelScale);
+      accGroup.add(sprite);
+      modelGroup.add(sprite);
       accTextSprites[r][c] = sprite;
     }
   }
@@ -168,7 +227,6 @@ function getColor(temp) {
   }
   
   const ratio = (Math.min(Math.max(temp, min), max) - min) / (max - min);
-  // Match matplotlib's YlOrRd colormap approximation
   const colorStops = [
     [0, 0, 255], // blue
     [0,255,255],
@@ -192,7 +250,134 @@ function getColor(temp) {
 let heatmapData = [];
 let currentFrame = 0;
 let isPlaying = false;
+let threeJSActive = true;
 let intervalId;
+
+function smoothPath(pathPoints, samples = 200) {
+  const curve = new THREE.CatmullRomCurve3(pathPoints, false, 'catmullrom', 0.1);
+  return curve.getPoints(samples);
+}
+
+function segmentByJump(points, baseLat, baseLon, maxJumpMeters = 10) {
+  const segments = [];
+  let currentSegment = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const curr = latLonToXZ(points[i].lat, points[i].lon, baseLat, baseLon);
+    const prev = currentSegment.length > 0
+      ? latLonToXZ(currentSegment[currentSegment.length - 1].lat, currentSegment[currentSegment.length - 1].lon, baseLat, baseLon)
+      : null;
+
+    if (prev) {
+      const dx = curr.x - prev.x;
+      const dz = curr.z - prev.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (dist > maxJumpMeters) {
+        if (currentSegment.length >= 2) segments.push([...currentSegment]);
+        currentSegment = [];
+      }
+    }
+
+    currentSegment.push(points[i]);
+  }
+
+  if (currentSegment.length >= 2) segments.push(currentSegment);
+  return segments;
+}
+
+function createTrackRibbon(pathPoints, width = 6) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = [];
+  const indices = [];
+
+  for (let i = 0; i < pathPoints.length - 1; i++) {
+    const p1 = pathPoints[i];
+    const p2 = pathPoints[i + 1];
+
+    const dir = new THREE.Vector3().subVectors(p2, p1).normalize();
+    const normal = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(width / 2);
+
+    const left1 = new THREE.Vector3().addVectors(p1, normal);
+    const right1 = new THREE.Vector3().subVectors(p1, normal);
+    const left2 = new THREE.Vector3().addVectors(p2, normal);
+    const right2 = new THREE.Vector3().subVectors(p2, normal);
+
+    const baseIndex = positions.length / 3;
+
+    [left1, right1, left2, right2].forEach(v => {
+      positions.push(v.x, v.y, v.z);
+    });
+
+    indices.push(baseIndex, baseIndex + 1, baseIndex + 2);
+    indices.push(baseIndex + 1, baseIndex + 3, baseIndex + 2);
+  }
+
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x444444,
+    side: THREE.DoubleSide
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  scene.add(mesh);
+}
+
+function createRibbonBetweenPaths(path1, path2) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = [];
+  const indices = [];
+
+  const len = Math.min(path1.length, path2.length);
+  for (let i = 0; i < len - 1; i++) {
+    const p1 = path1[i];
+    const p2 = path1[i + 1];
+    const p3 = path2[i];
+    const p4 = path2[i + 1];
+
+    const baseIndex = positions.length / 3;
+
+    [p1, p3, p2, p4].forEach(p => {
+      positions.push(p.x, p.y, p.z);
+    });
+
+    indices.push(baseIndex, baseIndex + 1, baseIndex + 2);
+    indices.push(baseIndex + 2, baseIndex + 1, baseIndex + 3);
+  }
+
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x444444,
+    side: THREE.DoubleSide
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  scene.add(mesh);
+}
+
+function segmentByLap(data, lapKey) {
+  const laps = [];
+  let currentLap = null;
+  let lastLapValue = null;
+
+  data.forEach(row => {
+    const lapValue = row[lapKey];
+    if (lapValue !== lastLapValue) {
+      currentLap = [];
+      laps.push(currentLap);
+      lastLapValue = lapValue;
+    }
+    currentLap.push(row);
+  });
+
+  return laps;
+}
 
 function loadCSVFromFile(file) {
   Papa.parse(file, {
@@ -206,38 +391,80 @@ function loadCSVFromFile(file) {
         });
         return cleaned;
       });
-  
-      // Defensive check
-      if (!heatmapData[0]) {
-        console.error("No rows in CSV");
-        return;
-      }
-  
+
+      if (!heatmapData[0]) return;
+
       const keys = Object.keys(heatmapData[0]);
       const sensorSelect = document.getElementById("sensorSelect");
       const xAxisSensor = document.getElementById("xAxisSensor");
       const yAxisSensor = document.getElementById("yAxisSensor");
-  
-      sensorSelect.innerHTML = '';
-      xAxisSensor.innerHTML = '';
-      yAxisSensor.innerHTML = '';
-  
+      const customSensorSelect = document.getElementById("customSensors");
+
+      [sensorSelect, xAxisSensor, yAxisSensor, customSensorSelect].forEach(el => el.innerHTML = '');
       keys.forEach(key => {
-        if (key.toLowerCase().includes("time")) return;
-        const option = new Option(key, key);
-        sensorSelect.appendChild(option);
-        xAxisSensor.appendChild(option.cloneNode(true));
-        yAxisSensor.appendChild(option.cloneNode(true));
+        if (!key.toLowerCase().includes("time")) {
+          const option = new Option(key, key);
+          sensorSelect.appendChild(option);
+          xAxisSensor.appendChild(option.cloneNode(true));
+          yAxisSensor.appendChild(option.cloneNode(true));
+          customSensorSelect.appendChild(option.cloneNode(true));
+        }
       });
-  
+
+      gpsLatKey = keys.find(k => k.toLowerCase().includes("lat"));
+      gpsLonKey = keys.find(k => k.toLowerCase().includes("lon"));
+      if (!gpsLatKey || !gpsLonKey) return;
+
+      baseLat = parseFloat(heatmapData[0][gpsLatKey]);
+      baseLon = parseFloat(heatmapData[0][gpsLonKey]);
+
+      const gpsPoints = heatmapData.map(row => ({
+        lat: parseFloat(row[gpsLatKey]),
+        lon: parseFloat(row[gpsLonKey])
+      })).filter(p => !isNaN(p.lat) && !isNaN(p.lon) && p.lat !== 0 && p.lon !== 0);
+
+      const allSmoothed = [];
+      const segments = segmentByJump(gpsPoints, baseLat, baseLon, 10);
+
+      segments.forEach(segment => {
+        const rawPath = segment.map(p => {
+          const { x, z } = latLonToXZ(p.lat, p.lon, baseLat, baseLon);
+          return new THREE.Vector3(x * TRACK_SCALE, 0.1, z * TRACK_SCALE);
+        });
+
+        const smoothed = smoothPath(rawPath, 400);
+
+        const center = smoothed.reduce((acc, p) => {
+          acc.x += p.x; acc.z += p.z;
+          return acc;
+        }, { x: 0, z: 0 });
+
+        center.x /= smoothed.length;
+        center.z /= smoothed.length;
+        trackOffset.set(center.x, 0, center.z);  // store offset globally
+
+        smoothed.forEach(p => {
+          p.x -= center.x;
+          p.z -= center.z;
+        });
+
+        allSmoothed.push(smoothed);
+      });
+
+      if (allSmoothed.length === 1) {
+        createTrackRibbon(allSmoothed[0]);
+      } else {
+        for (let i = 0; i < allSmoothed.length - 1; i++) {
+          createRibbonBetweenPaths(allSmoothed[i], allSmoothed[i + 1]);
+        }
+      }      
+      
       document.getElementById("timeSlider").max = heatmapData.length - 1;
       updateAccumulatorHeatmap();
     }
   });
-  
-  console.log("CSV Data:", heatmapData);
-  console.log("CSV Keys:", Object.keys(heatmapData[0]));
 }
+
 
 let mode = "normal"
 let min = 100;
@@ -247,6 +474,10 @@ function updateAccumulatorHeatmap() {
   const row = heatmapData[currentFrame];
   if (!row) return;
   let flatKeys = Object.keys(row).filter(k => k.startsWith("seg"));
+  const rawHeadingDeg = parseFloat(row["gps_direction[none]"]);
+  const normalizedDeg = ((rawHeadingDeg % 360) + 360) % 360;  // ensures 0–359
+  direction = degToRad(normalizedDeg);
+  console.log(direction)
 
   const timeKey = Object.keys(row).find(k => k.toLowerCase().includes("time"));
   if (timeKey) {
@@ -289,8 +520,28 @@ function updateAccumulatorHeatmap() {
 
   const tireVisible = document.getElementById("tireSection")?.style.display === "block";
   if (tireVisible) updateTireHeatmap();
-}
 
+  const customVisible = document.getElementById("customGraphSection")?.style.display === "block";
+  if (customVisible) updateCustomGraphs();
+
+  if (gpsLatKey && gpsLonKey && heatmapData.length > 0) {
+    const row = heatmapData[currentFrame];
+    const lat = parseFloat(row[gpsLatKey]);
+    const lon = parseFloat(row[gpsLonKey]);
+  
+    const pos = latLonToXZ(lat, lon, baseLat, baseLon);
+    const newX = pos.x * TRACK_SCALE - trackOffset.x;
+    const newZ = pos.z * TRACK_SCALE - trackOffset.z;
+
+    if (Math.abs(newX) > 10000 || Math.abs(newZ) > 10000) {
+      targetPosition.set(0, 0.1, 0);
+    } else {
+      targetPosition.set(newX, 0.1, newZ);
+    }
+
+  }
+  
+}
 
 function togglePlayPause() {
   if (isPlaying) {
@@ -327,7 +578,7 @@ function updateTireHeatmap() {
     zones.forEach((zone, i) => {
       const key = `${tire}_${zone}`;
       const value = parseFloat(row[key]);
-      const color = getColorClamped(value, tireMin, tireMax);
+      const color = getColorMap(value, tireMin, tireMax);
 
       // Fill heatmap zone
       ctx.fillStyle = color;
@@ -346,9 +597,16 @@ function updateTireHeatmap() {
       ctx.fillText(zoneLabels[zone], i * 40 + 20, 10);
     });
   });
+
+  const throttle = parseFloat(row["M400_throttlePosition[%]"]) * 100;
+  const brakeF = parseFloat(row["ATCCF_brakePressureF[psi]"]) / 6;
+  const brakeR = parseFloat(row["ATCCF_brakePressureR[psi]"]) / 6;
+  drawPedalBars(throttle, brakeF, brakeR);
+  const speed = parseFloat(row["gps_speed[km/h]"]);
+  drawSpeedometer(speed);
 }
 
-function getColorClamped(temp, min, max) {
+function getColorMap(temp, min, max) {
   const ratio = (Math.min(Math.max(temp, min), max) - min) / (max - min);
   const colorStops = [
     [0, 0, 255],
@@ -368,16 +626,64 @@ function getColorClamped(temp, min, max) {
   return `rgb(${r},${g},${b})`;
 }
 
+let direction = 0;
+let smoothedDirection = 0;
+
+function normalizeAngleRad(angle) {
+  return (angle + Math.PI * 2) % (Math.PI * 2);
+}
+
+// Increase smoothing factor (0.05 = smoother but slower)
+const ROTATION_SMOOTHING = 0.05;
 
 function animate() {
+  if (!threeJSActive) return;
 
-  // :)
-  if (planets) {
-    planetOrbit1.rotation.y += 0.002;
-    planetOrbit2.rotation.y += 0.002;
-  }
+  // Normalize both angles to [0, 2π)
+  const target = normalizeAngleRad(direction);
+  const current = normalizeAngleRad(smoothedDirection);
+
+  // Shortest angle difference
+  let angleDiff = target - current;
+  if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+  if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+
+  // Apply smoother interpolation
+  smoothedDirection += angleDiff * ROTATION_SMOOTHING;
+
+  // Set rotation — tweak offset if model points "forward" at wrong angle
+  modelGroup.rotation.set(0, -smoothedDirection + Math.PI / 2, 0);
+
+  // Smooth position update
+  accGroup.position.lerp(targetPosition, 0.1);
+
+  // Update camera
+  const accCenterWorld = getAccCenterWorldPosition();
+  const offsetLocal = cameraOffsetFromAcc.clone();
+  const offsetWorld = accGroup.localToWorld(offsetLocal.clone());
+  camera.position.copy(offsetWorld);
+  orbit.target.copy(accCenterWorld);
+  orbit.update();
 
   renderer.render(scene, camera);
+}
+
+function getAccCenterWorldPosition() {
+  const centerR = 7;
+  const centerC = 2;
+  const plane1 = accPlanesArray[centerR][centerC];
+  const plane2 = accPlanesArray[centerR + 1][centerC];
+  const plane3 = accPlanesArray[centerR][centerC + 1];
+  const plane4 = accPlanesArray[centerR + 1][centerC + 1];
+
+  const center = new THREE.Vector3();
+  center.add(plane1.position);
+  center.add(plane2.position);
+  center.add(plane3.position);
+  center.add(plane4.position);
+  center.multiplyScalar(0.25); // average of 4 positions
+
+  return accGroup.localToWorld(center.clone());
 }
 
 // Predefined color palette
@@ -417,7 +723,9 @@ window.addEventListener('DOMContentLoaded', () => {
       <option value="scaled">scaled</option>
     </select><br><br>
     <button id="playPauseBtn">Play</button>
-    Speed: <input type="range" id="speedSlider" min="100" max="2000" value="500" step="100" /><br>
+    <button id="toggleThreeJSBtn">Pause 3D</button>
+    <button id="toggleChassisBtn">Toggle Chassis Transparency</button><br>
+    Speed: <input type="range" id="speedSlider" min="1000" max="2000" value="2000" step="100" /><br>
     Time: <input type="range" id="timeSlider" min="0" max="0" value="0" />
     Temp Max: <input type="number" id="maxTempSlider" min="20" max="100" value="60" step="2" /><br>
   `);
@@ -441,7 +749,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <canvas id="timeSeriesChart" width="600" height="300"></canvas>    
   `);
 
-  const section3 = createExpandableSection("Tire Temperature Heatmap", 'tireSection',`
+  const section3 = createExpandableSection("Tire Data & Pedal Inputs", 'tireSection',`
     <label for="tireMin">Min Temp:</label>
     <input type="number" id="tireMin" value="20" step="0.5"><br>
     <label for="tireMax">Max Temp:</label>
@@ -464,7 +772,10 @@ window.addEventListener('DOMContentLoaded', () => {
           </div>
         `).join("")}
       </div>
-    </div>
+    </div><br>
+
+    <canvas id="pedalInputCanvas" width="250" height="100" style="margin-top:10px;border:1px solid #ccc;"></canvas>
+    <canvas id="speedometerCanvas" width="250" height="140" style="margin-top:10px;border:1px solid #ccc;"></canvas>
   `);    
 
   const section4 = createExpandableSection("Sensor XY Scatter Plot", 'xySection', `
@@ -478,12 +789,28 @@ window.addEventListener('DOMContentLoaded', () => {
   
     <canvas id="xyChart" width="600" height="300"></canvas>
   `);
+  const section5 = createExpandableSection("Custom Graph Builder", 'customGraphSection', `
+    <label for="graphType">Chart Type:</label>
+    <select id="graphType" style="width: 100%;">
+      <option value="timeSeries">Time Series</option>
+      <option value="gauge">Gauge</option>
+      <option value="barInput">Pedal-style Bar</option>
+    </select><br><br>
+  
+    <label for="customSensors">Select Sensors:</label><br>
+    <select id="customSensors" multiple size="10" style="width: 100%"></select><br><br>
+  
+    <button id="renderCustomGraphBtn">Render Graph</button><br><br>
+  
+    <div id="customGraphsContainer"></div>
+  `); 
   
   controls.innerHTML = ''; // clear anything in it
   controls.appendChild(section1);
   controls.appendChild(section2);
   controls.appendChild(section3);
   controls.appendChild(section4);
+  controls.appendChild(section5);  // Custom Graph Builder section
 
   let xAxisSensor, yAxisSensor;
 
@@ -517,23 +844,11 @@ window.addEventListener('DOMContentLoaded', () => {
   controls.appendChild(timeLabel);
 
   const plotXYBtn = document.getElementById("plotXYBtn");
-
   plotXYBtn.addEventListener("click", updateXYChart);
 
   fileInput.addEventListener("change", e => {
     const file = e.target.files[0];
     if (file) loadCSVFromFile(file);
-    const keys = Object.keys(heatmapData[0]);
-    const sensorSelect = document.getElementById("sensorSelect");
-    sensorSelect.innerHTML = '';
-    keys.forEach(key => {
-      if (key !== 'time') {
-        const option = document.createElement("option");
-        option.value = key;
-        option.text = key;
-        sensorSelect.appendChild(option);
-      }
-    });
   });
 
   playPauseBtn.addEventListener("click", togglePlayPause);
@@ -551,6 +866,29 @@ window.addEventListener('DOMContentLoaded', () => {
       }, 2100 - parseInt(e.target.value));
     }
   });
+  const toggleThreeJSBtn = document.getElementById("toggleThreeJSBtn");
+  toggleThreeJSBtn.addEventListener("click", () => {
+    threeJSActive = !threeJSActive;
+    toggleThreeJSBtn.innerText = threeJSActive ? "Pause 3D" : "Resume 3D";
+
+    if (threeJSActive) {
+      renderer.setAnimationLoop(animate);
+    } else {
+      renderer.setAnimationLoop(null);
+    }
+  });
+
+  document.getElementById("toggleChassisBtn").addEventListener("click", () => {
+    if (!chassisMesh) return;
+  
+    chassisMesh.traverse(child => {
+      if (child.isMesh) {
+        child.material.transparent = true;
+        child.material.opacity = child.material.opacity === 1 ? 0.3 : 1;
+        child.material.depthWrite = child.material.opacity === 1; // fix render ordering
+      }
+    });
+  });  
 
   addSensorsBtn.addEventListener("click", () => {
     const selected = Array.from(document.getElementById("sensorSelect").selectedOptions).map(o => o.value);
@@ -566,7 +904,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   xyCanvas = document.getElementById("xyChart");
-  
+  document.getElementById("renderCustomGraphBtn").addEventListener("click", renderCustomGraph);
 });
 
 function createExpandableSection(titleText, sectionId = "", contentHTML, ) {
@@ -689,16 +1027,16 @@ function updateTimeSeriesChart() {
 
   const timeWindow = parseFloat(document.getElementById("timeWindow").value);
   const currentRow = heatmapData[currentFrame];
-  if (!currentRow || !currentRow["time(s)"]) return;
+  if (!currentRow || !currentRow["xtime    [s]"]) return;
 
-  const currentTime = parseFloat(currentRow["time(s)"]);
+  const currentTime = parseFloat(currentRow["xtime    [s]"]);
   const startTime = currentTime - timeWindow;
 
   const yMin = parseFloat(document.getElementById("yMin").value);
   const yMax = parseFloat(document.getElementById("yMax").value);
 
   const visibleRows = heatmapData.filter(row => {
-    const t = parseFloat(row["time(s)"]);
+    const t = parseFloat(row["xtime    [s]"]);
     return t >= startTime && t <= currentTime;
   });
 
@@ -706,7 +1044,7 @@ function updateTimeSeriesChart() {
     label: sensorKey,
     borderColor: getPersistentColor(sensorKey),
     data: visibleRows.map(row => ({
-      x: parseFloat(row["time(s)"]),
+      x: parseFloat(row["xtime    [s]"]),
       y: parseFloat(row[sensorKey])
     })),
     fill: false,
@@ -725,14 +1063,95 @@ function updateTimeSeriesChart() {
   timeSeriesChart.update();
 }
 
-function getRandomColor(key) {
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) hash = key.charCodeAt(i) + ((hash << 5) - hash);
-  const color = `hsl(${hash % 360}, 70%, 50%)`;
-  return color;
+function drawPedalBars(throttle, brakeF, brakeR) {
+  if ([throttle, brakeF, brakeR].some(v => isNaN(v))) {
+    console.warn("Invalid values for pedal inputs", { throttle, brakeF, brakeR });
+    return;
+  }
+
+  const canvas = document.getElementById("pedalInputCanvas");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const labels = ["Throttle", "Brake F", "Brake R"];
+  const values = [throttle, brakeF, brakeR];
+  const colors = ["green", "red", "darkred"];
+
+  for (let i = 0; i < values.length; i++) {
+    const val = values[i];
+    const barWidth = 50;
+    const barHeight = val;
+    const x = i * 80 + 10;
+    const y = canvas.height - barHeight;
+
+    // Bar
+    ctx.fillStyle = colors[i];
+    ctx.fillRect(x, y, barWidth, barHeight);
+
+    // Value Label
+    ctx.fillStyle = "black";
+    ctx.font = "12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(`${val.toFixed(0)}%`, x + barWidth / 2, y - 5);
+
+    // Label
+    ctx.fillText(labels[i], x + barWidth / 2, canvas.height - 5);
+  }
+}
+
+function drawSpeedometer(speed) {
+  const canvas = document.getElementById("speedometerCanvas");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const centerX = canvas.width / 2;
+  const centerY = canvas.height - 10;
+  const radius = 100;
+  const maxSpeed = 100;
+
+  // Arc background
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, Math.PI, 2 * Math.PI);
+  ctx.lineWidth = 15;
+  ctx.strokeStyle = "#eee";
+  ctx.stroke();
+
+  // Colored arc for current speed
+  const angle = Math.PI + (speed / maxSpeed) * Math.PI;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, Math.PI, angle);
+  ctx.strokeStyle = "green";
+  ctx.stroke();
+
+  // Needle
+  const needleLength = radius - 15;
+  const needleAngle = Math.PI + (speed / maxSpeed) * Math.PI;
+  const needleX = centerX + needleLength * Math.cos(needleAngle);
+  const needleY = centerY + needleLength * Math.sin(needleAngle);
+
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY);
+  ctx.lineTo(needleX, needleY);
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // Center hub
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, 5, 0, 2 * Math.PI);
+  ctx.fillStyle = "black";
+  ctx.fill();
+
+  // Speed label
+  ctx.fillStyle = "black";
+  ctx.font = "16px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(`${speed.toFixed(1)} kph`, centerX, 20);
 }
 
 let xyChart = null;
+let customGraphs = [];
+
 
 function updateXYChart() {
   const xKey = xAxisSensor.value;
@@ -786,11 +1205,198 @@ function updateXYChart() {
   }
 }
 
+function renderCustomGraph() {
+  const type = document.getElementById("graphType").value;
+  const selected = Array.from(document.getElementById("customSensors").selectedOptions).map(o => o.value);
+  if (selected.length === 0 || heatmapData.length === 0) return;
+
+  const graphId = `customGraph-${Date.now()}`;
+  const container = document.createElement("div");
+  container.style.marginBottom = "15px";
+  container.id = graphId;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 300;
+  canvas.height = type === "gauge" ? 150 : 100;
+  container.appendChild(canvas);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.textContent = "Delete";
+  removeBtn.addEventListener("click", () => {
+    customGraphs = customGraphs.filter(g => g.id !== graphId);
+    container.remove();
+  });
+  container.appendChild(removeBtn);
+
+  document.getElementById("customGraphsContainer").appendChild(container);
+
+  const ctx = canvas.getContext("2d");
+
+  const graph = {
+    id: graphId,
+    type,
+    canvas,
+    ctx,
+    sensors: selected
+  };
+
+  customGraphs.push(graph);
+}
+
+
+function updateCustomGraphs() {
+  const timeKey = Object.keys(heatmapData[0]).find(k => k.toLowerCase().includes("time"));
+  const row = heatmapData[currentFrame];
+  if (!row) return;
+
+  customGraphs.forEach(graph => {
+    if (graph.type === "gauge") {
+      const value = parseFloat(row[graph.sensors[0]]);
+      drawGauge(graph.ctx, value, graph.sensors[0]);
+    } else if (graph.type === "barInput") {
+      const values = graph.sensors.map(sensor => ({
+        label: sensor,
+        value: parseFloat(row[sensor])
+      }));
+      drawCustomBars(graph.ctx, values);
+    } else if (type === "timeSeries") {
+      const timeKey = Object.keys(heatmapData[0]).find(k => k.toLowerCase().includes("time"));
+      const datasets = selected.map(sensor => ({
+        label: sensor,
+        data: heatmapData.map(row => ({
+          x: parseFloat(row[timeKey]),
+          y: parseFloat(row[sensor])
+        })),
+        borderColor: getPersistentColor(sensor),
+        backgroundColor: getPersistentColor(sensor),
+        fill: false,
+        tension: 0.4,
+        pointRadius: 0
+      }));
+      const chart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets },
+        options: {
+          responsive: false,
+          animation: false,
+          scales: {
+            x: {
+              type: 'linear',
+              title: { display: true, text: 'Time (s)' }
+            },
+            y: {
+              title: { display: true, text: 'Value' }
+            }
+          },
+          plugins: {
+            legend: { display: true }
+          }
+        }
+      });
+    
+      graph.chart = chart; // 💡 Attach the chart so it can be updated later
+    }
+    
+  });
+}
+
+function drawGauge(ctx, value, label = "Sensor") {
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  const centerX = ctx.canvas.width / 2;
+  const centerY = ctx.canvas.height - 10;
+  const radius = 100;
+  const max = 100;
+
+  const angle = Math.PI + (value / max) * Math.PI;
+
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, Math.PI, 2 * Math.PI);
+  ctx.lineWidth = 15;
+  ctx.strokeStyle = "#eee";
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, Math.PI, angle);
+  ctx.strokeStyle = "green";
+  ctx.stroke();
+
+  const needleX = centerX + (radius - 10) * Math.cos(angle);
+  const needleY = centerY + (radius - 10) * Math.sin(angle);
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY);
+  ctx.lineTo(needleX, needleY);
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.fillStyle = "black";
+  ctx.font = "16px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(`${label}: ${value.toFixed(1)}`, centerX, 20);
+}
+
+function drawCustomBars(ctx, sensors) {
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+  sensors.forEach((sensor, i) => {
+    const val = sensor.value;
+    const label = sensor.label;
+    const barWidth = 50;
+    const barHeight = val;
+    const x = i * 80 + 10;
+    const y = ctx.canvas.height - barHeight;
+
+    ctx.fillStyle = getPersistentColor(label);
+    ctx.fillRect(x, y, barWidth, barHeight);
+
+    ctx.fillStyle = "black";
+    ctx.font = "12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(`${val.toFixed(1)}`, x + barWidth / 2, y - 5);
+    ctx.fillText(label, x + barWidth / 2, ctx.canvas.height - 5);
+  });
+}
 
 camera.position.x = 100;
 camera.position.z = 100;
 camera.position.y = 300;
 
 createPlanes();
-load3D(accumulatorModel);
-renderer.setAnimationLoop(animate);
+load3D(accumulatorModel, 0, 0, 0, carModelScale, carModelScale, carModelScale);
+const chassisModelScale = 1150;
+load3D(chassisModel, 0, 0, 0, carModelScale * chassisModelScale, carModelScale * chassisModelScale, carModelScale * chassisModelScale);
+// Wait until accumulator is at a valid position
+
+const cameraRig = new THREE.Group();
+scene.add(cameraRig);
+
+cameraRig.add(camera);
+camera.position.set(0, 4, 8); // behind and above car
+camera.lookAt(0, 0, 0);
+orbit.enablePan = false;      // optional: prevent drifting
+orbit.enableZoom = true;      // keep this if you want zoom
+orbit.enableDamping = true;   // smooth orbiting
+orbit.dampingFactor = 0.1;
+// Store initial distance vector
+//let initialOffset = camera.position.clone().sub(accGroup.position.clone());
+
+orbit.addEventListener('change', () => {
+  cameraOffsetFromAcc = camera.position.clone().sub(accGroup.position.clone());
+});
+
+// Wait briefly to ensure planes are added before calculating center
+setTimeout(() => {
+  const center = getAccCenterWorldPosition();
+  orbit.target.copy(center);
+  orbit.update();
+
+  // Update the offset vector from this center to the current camera position
+  cameraOffsetFromAcc = camera.position.clone().sub(center);
+}, 100);
+
+const arrowHelper = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1.5, 0), 2, 0xff0000);
+modelGroup.add(arrowHelper);
+
+renderer.setAnimationLoop(() => {
+  if (threeJSActive) animate();
+});
