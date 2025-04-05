@@ -148,6 +148,8 @@ let targetPosition = new THREE.Vector3();
 let trackOffset = new THREE.Vector3(0, 0, 0);
 let cameraOffset = new THREE.Vector3();
 let cameraOffsetFromAcc = new THREE.Vector3(0, 40, 80); // initial offset
+let carMovement = true;
+let cameraFollowCar = true;
 
 const carModelScale = 0.03;
 const TRACK_SCALE = 10;
@@ -323,6 +325,7 @@ function createTrackRibbon(pathPoints, width = 6) {
   });
 
   const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.trackRibbon = true;
   scene.add(mesh);
 }
 
@@ -358,7 +361,26 @@ function createRibbonBetweenPaths(path1, path2) {
   });
 
   const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.trackRibbon = true;
   scene.add(mesh);
+}
+
+let earthOverlayMesh = null;
+
+const earthOverlayRotationDeg = 90;
+function createEarthOverlay(imageUrl, widthMeters, heightMeters) {
+  const loader = new THREE.TextureLoader();
+  loader.load(imageUrl, texture => {
+    const geometry = new THREE.PlaneGeometry(widthMeters, heightMeters);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 1 });
+    earthOverlayMesh = new THREE.Mesh(geometry, material);
+
+    earthOverlayMesh.rotation.set(-Math.PI / 2, 0, degToRad(earthOverlayRotationDeg));
+    earthOverlayMesh.position.set(0, 0.05, 0);  // Slightly above ground
+
+    scene.add(earthOverlayMesh);
+    earthOverlayMesh.visible = false; // Start hidden
+  });
 }
 
 function segmentByLap(data, lapKey) {
@@ -634,35 +656,37 @@ function normalizeAngleRad(angle) {
 }
 
 // Increase smoothing factor (0.05 = smoother but slower)
-const ROTATION_SMOOTHING = 0.05;
+const ROTATION_SMOOTHING = 1;
 
 function animate() {
   if (!threeJSActive) return;
+  
+  if (carMovement) {
+    const target = normalizeAngleRad(direction);
+    const current = normalizeAngleRad(smoothedDirection);
+    let angleDiff = target - current;
+    if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+    if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+    smoothedDirection += angleDiff * ROTATION_SMOOTHING;
+  
+    modelGroup.rotation.set(0, -smoothedDirection + Math.PI / 2, 0);
+    accGroup.position.lerp(targetPosition, 0.1);
+  
+    if (cameraFollowCar) {
+      const accCenterWorld = getAccCenterWorldPosition();
+      const offsetLocal = cameraOffsetFromAcc.clone();
+      const offsetWorld = accGroup.localToWorld(offsetLocal.clone());
+      camera.position.copy(offsetWorld);
+      orbit.target.copy(accCenterWorld);
+    }
+  }
 
-  // Normalize both angles to [0, 2π)
-  const target = normalizeAngleRad(direction);
-  const current = normalizeAngleRad(smoothedDirection);
-
-  // Shortest angle difference
-  let angleDiff = target - current;
-  if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-  if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-
-  // Apply smoother interpolation
-  smoothedDirection += angleDiff * ROTATION_SMOOTHING;
-
-  // Set rotation — tweak offset if model points "forward" at wrong angle
-  modelGroup.rotation.set(0, -smoothedDirection + Math.PI / 2, 0);
-
-  // Smooth position update
-  accGroup.position.lerp(targetPosition, 0.1);
-
-  // Update camera
-  const accCenterWorld = getAccCenterWorldPosition();
-  const offsetLocal = cameraOffsetFromAcc.clone();
-  const offsetWorld = accGroup.localToWorld(offsetLocal.clone());
-  camera.position.copy(offsetWorld);
-  orbit.target.copy(accCenterWorld);
+  if (cameraFollowCar) {
+    const center = getAccCenterWorldPosition();
+    orbit.target.copy(center);
+    orbit.update();
+  }  
+  
   orbit.update();
 
   renderer.render(scene, camera);
@@ -725,6 +749,10 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="playPauseBtn">Play</button>
     <button id="toggleThreeJSBtn">Pause 3D</button>
     <button id="toggleChassisBtn">Toggle Chassis Transparency</button><br>
+    <button id="toggleCarMovementBtn">Toggle car movement</button>
+    <button id="toggleCameraFollowBtn">Toggle Camera Follow</button><br>
+    <button id="toggleOverlayBtn">Toggle Earth Overlay</button> 
+    <input type="range" min="0" max="1" step="0.01" value="1" id="overlayOpacity"> <br>
     Speed: <input type="range" id="speedSlider" min="1000" max="2000" value="2000" step="100" /><br>
     Time: <input type="range" id="timeSlider" min="0" max="0" value="0" />
     Temp Max: <input type="number" id="maxTempSlider" min="20" max="100" value="60" step="2" /><br>
@@ -826,6 +854,8 @@ window.addEventListener('DOMContentLoaded', () => {
   const playPauseBtn = document.getElementById("playPauseBtn");
   const speedSlider = document.getElementById("speedSlider");
   const timeSlider = document.getElementById("timeSlider");
+  const carMovementButton = document.getElementById("toggleCarMovementBtn");
+  const cameraFollowBtn = document.getElementById("toggleCameraFollowBtn");
   const maxTempSlider = document.getElementById("maxTempSlider");
   const sensorSelect = document.getElementById("sensorSelect");
   const addSensorsBtn = document.getElementById("addSensorsBtn");
@@ -856,6 +886,12 @@ window.addEventListener('DOMContentLoaded', () => {
     currentFrame = parseInt(e.target.value);
     updateAccumulatorHeatmap();
   });
+
+  carMovementButton.addEventListener("click", () => {
+    carMovement = !carMovement;
+    carMovementButton.innerText = carMovement ? "Disable Car Movement" : "Enable Car Movement";
+  });  
+
   speedSlider.addEventListener("input", e => {
     if (isPlaying) {
       clearInterval(intervalId);
@@ -878,6 +914,23 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  cameraFollowBtn.addEventListener("click", () => {
+    cameraFollowCar = !cameraFollowCar;
+    cameraFollowBtn.innerText = cameraFollowCar ? "Disable Camera Follow" : "Enable Camera Follow";
+  
+    orbit.enablePan = !cameraFollowCar;
+  });
+  
+  document.getElementById("toggleOverlayBtn").addEventListener("click", () => {
+    if (!earthOverlayMesh) return;
+    earthOverlayMesh.visible = !earthOverlayMesh.visible;
+  
+    // Optional: hide ribbon meshes if showing overlay
+    scene.traverse(obj => {
+      if (obj.userData.trackRibbon) obj.visible = !earthOverlayMesh.visible;
+    });
+  });  
+
   document.getElementById("toggleChassisBtn").addEventListener("click", () => {
     if (!chassisMesh) return;
   
@@ -888,6 +941,12 @@ window.addEventListener('DOMContentLoaded', () => {
         child.material.depthWrite = child.material.opacity === 1; // fix render ordering
       }
     });
+  });  
+
+  document.getElementById("overlayOpacity").addEventListener("input", e => {
+    if (earthOverlayMesh) {
+      earthOverlayMesh.material.opacity = parseFloat(e.target.value);
+    }
   });  
 
   addSensorsBtn.addEventListener("click", () => {
@@ -1243,7 +1302,6 @@ function renderCustomGraph() {
   customGraphs.push(graph);
 }
 
-
 function updateCustomGraphs() {
   const timeKey = Object.keys(heatmapData[0]).find(k => k.toLowerCase().includes("time"));
   const row = heatmapData[currentFrame];
@@ -1259,7 +1317,7 @@ function updateCustomGraphs() {
         value: parseFloat(row[sensor])
       }));
       drawCustomBars(graph.ctx, values);
-    } else if (type === "timeSeries") {
+    } if (type === "timeSeries") {
       const timeKey = Object.keys(heatmapData[0]).find(k => k.toLowerCase().includes("time"));
       const datasets = selected.map(sensor => ({
         label: sensor,
@@ -1273,7 +1331,8 @@ function updateCustomGraphs() {
         tension: 0.4,
         pointRadius: 0
       }));
-      const chart = new Chart(ctx, {
+    
+      graph.chart = new Chart(ctx, {
         type: 'line',
         data: { datasets },
         options: {
@@ -1293,9 +1352,7 @@ function updateCustomGraphs() {
           }
         }
       });
-    
-      graph.chart = chart; // 💡 Attach the chart so it can be updated later
-    }
+    }        
     
   });
 }
@@ -1365,7 +1422,6 @@ createPlanes();
 load3D(accumulatorModel, 0, 0, 0, carModelScale, carModelScale, carModelScale);
 const chassisModelScale = 1150;
 load3D(chassisModel, 0, 0, 0, carModelScale * chassisModelScale, carModelScale * chassisModelScale, carModelScale * chassisModelScale);
-// Wait until accumulator is at a valid position
 
 const cameraRig = new THREE.Group();
 scene.add(cameraRig);
@@ -1383,6 +1439,9 @@ orbit.dampingFactor = 0.1;
 orbit.addEventListener('change', () => {
   cameraOffsetFromAcc = camera.position.clone().sub(accGroup.position.clone());
 });
+
+const overlay_scale = 4000
+createEarthOverlay('msu_erc.png', overlay_scale, overlay_scale);
 
 // Wait briefly to ensure planes are added before calculating center
 setTimeout(() => {
