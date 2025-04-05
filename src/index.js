@@ -150,6 +150,9 @@ let cameraOffset = new THREE.Vector3();
 let cameraOffsetFromAcc = new THREE.Vector3(0, 40, 80); // initial offset
 let carMovement = true;
 let cameraFollowCar = true;
+let userIsOrbiting = false;
+let cameraLockToAcc = false;
+
 
 const carModelScale = 0.03;
 const TRACK_SCALE = 10;
@@ -672,43 +675,44 @@ function animate() {
     modelGroup.rotation.set(0, -smoothedDirection + Math.PI / 2, 0);
     accGroup.position.lerp(targetPosition, 0.1);
   
-    if (cameraFollowCar) {
-      const accCenterWorld = getAccCenterWorldPosition();
-      const offsetLocal = cameraOffsetFromAcc.clone();
-      const offsetWorld = accGroup.localToWorld(offsetLocal.clone());
-      camera.position.copy(offsetWorld);
-      orbit.target.copy(accCenterWorld);
+    if (cameraLockToAcc) {
+      const accCenter = targetPosition.clone().add(new THREE.Vector3(0, 0.1, 0)); // position of the car
+      const rotatedOffset = cameraOffsetFromAcc.clone().applyAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        -smoothedDirection
+      );
+      camera.position.copy(accCenter.clone().add(rotatedOffset)); // No lerp = fixed offset
+      orbit.target.copy(accCenter); // lock target as well
     }
+  
   }
 
-  if (cameraFollowCar) {
-    const center = getAccCenterWorldPosition();
-    orbit.target.copy(center);
-    orbit.update();
-  }  
-  
   orbit.update();
-
   renderer.render(scene, camera);
 }
 
 function getAccCenterWorldPosition() {
   const centerR = 7;
   const centerC = 2;
+
   const plane1 = accPlanesArray[centerR][centerC];
   const plane2 = accPlanesArray[centerR + 1][centerC];
   const plane3 = accPlanesArray[centerR][centerC + 1];
   const plane4 = accPlanesArray[centerR + 1][centerC + 1];
 
-  const center = new THREE.Vector3();
-  center.add(plane1.position);
-  center.add(plane2.position);
-  center.add(plane3.position);
-  center.add(plane4.position);
-  center.multiplyScalar(0.25); // average of 4 positions
+  // Get local positions of each plane
+  const localCenter = new THREE.Vector3();
+  [plane1, plane2, plane3, plane4].forEach(plane => {
+    localCenter.add(plane.position);
+  });
+  localCenter.multiplyScalar(0.25); // average position
 
-  return accGroup.localToWorld(center.clone());
+  // Apply modelGroup rotation to the local center
+  const rotated = localCenter.clone().applyMatrix4(modelGroup.matrixWorld);
+
+  return rotated;
 }
+
 
 // Predefined color palette
 const predefinedColors = [
@@ -749,8 +753,8 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="playPauseBtn">Play</button>
     <button id="toggleThreeJSBtn">Pause 3D</button>
     <button id="toggleChassisBtn">Toggle Chassis Transparency</button><br>
-    <button id="toggleCarMovementBtn">Toggle car movement</button>
-    <button id="toggleCameraFollowBtn">Toggle Camera Follow</button><br>
+    <button id="toggleCarMovementBtn">Disable car movement</button>
+    <button id="toggleCameraFollowBtn">Disable Camera Follow</button><br>
     <button id="toggleOverlayBtn">Toggle Earth Overlay</button> 
     <input type="range" min="0" max="1" step="0.01" value="1" id="overlayOpacity"> <br>
     Speed: <input type="range" id="speedSlider" min="1000" max="2000" value="2000" step="100" /><br>
@@ -915,11 +919,21 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   cameraFollowBtn.addEventListener("click", () => {
-    cameraFollowCar = !cameraFollowCar;
-    cameraFollowBtn.innerText = cameraFollowCar ? "Disable Camera Follow" : "Enable Camera Follow";
+    cameraLockToAcc = !cameraLockToAcc;
+    cameraFollowBtn.innerText = cameraLockToAcc ? "Unlock Camera" : "Lock Camera to Accumulator";
   
-    orbit.enablePan = !cameraFollowCar;
-  });
+    if (cameraLockToAcc) {
+      const accCenter = getAccCenterWorldPosition();
+      cameraOffsetFromAcc = camera.position.clone().sub(accCenter);
+    
+      orbit.enabled = false;
+      orbit.enablePan = false;
+    } else {
+      orbit.enabled = true;
+      orbit.enablePan = true;
+    }
+    
+  });  
   
   document.getElementById("toggleOverlayBtn").addEventListener("click", () => {
     if (!earthOverlayMesh) return;
@@ -1436,8 +1450,16 @@ orbit.dampingFactor = 0.1;
 // Store initial distance vector
 //let initialOffset = camera.position.clone().sub(accGroup.position.clone());
 
-orbit.addEventListener('change', () => {
-  cameraOffsetFromAcc = camera.position.clone().sub(accGroup.position.clone());
+orbit.addEventListener('start', () => {
+  userIsOrbiting = true;
+});
+orbit.addEventListener('end', () => {
+  userIsOrbiting = false;
+
+  if (!cameraFollowCar) return;
+
+  const accCenter = getAccCenterWorldPosition();
+  cameraOffsetFromAcc = camera.position.clone().sub(accCenter);
 });
 
 const overlay_scale = 4000
@@ -1446,7 +1468,7 @@ createEarthOverlay('msu_erc.png', overlay_scale, overlay_scale);
 // Wait briefly to ensure planes are added before calculating center
 setTimeout(() => {
   const center = getAccCenterWorldPosition();
-  orbit.target.copy(center);
+  //orbit.target.copy(center);
   orbit.update();
 
   // Update the offset vector from this center to the current camera position
