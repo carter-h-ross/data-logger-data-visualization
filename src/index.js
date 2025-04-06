@@ -246,6 +246,39 @@ function createPlanes() {
   }
 }
 
+function updateAllTimeSeriesGraphs() {
+  if (heatmapData.length === 0) return;
+  const row = heatmapData[currentFrame];
+  const timeKey = Object.keys(row).find(k => k.toLowerCase().includes("time"));
+  if (!timeKey) return;
+  const currentTime = parseFloat(row[timeKey]);
+
+  timeSeriesGraphs.forEach(graph => {
+    const chart = graph.chart;
+    const autoScale = graph.autoScale.checked;
+
+    chart.data.datasets.forEach(dataset => {
+      const sensor = dataset.label;
+      const value = parseFloat(row[sensor]);
+      if (!isNaN(value)) {
+        dataset.data.push({ x: currentTime, y: value });
+      }
+
+      // Limit to last N points if needed
+      if (dataset.data.length > 3000) {
+        dataset.data.shift();  // prevent memory bloat
+      }
+    });
+
+    if (autoScale) {
+      chart.options.scales.y.min = undefined;
+      chart.options.scales.y.max = undefined;
+    }
+
+    chart.update("none");
+  });
+}
+
 let mode = "normal"
 let min = 100;
 let max = 0;
