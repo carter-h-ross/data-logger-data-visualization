@@ -8,6 +8,10 @@
     * menu creation and control
 */
 
+/*-------------------------------------*/
+/*---------- project imports ----------*/
+/*-------------------------------------*/
+
 // threeJS imports
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -19,19 +23,40 @@ import Papa from 'papaparse';
 // chart.js imports
 import Chart from 'chart.js/auto';
 import { getRelativePosition } from 'chart.js/helpers';
-
 import {Colors} from 'chart.js'
 Chart.register(Colors);
 
-import { Delaunay } from 'd3-delaunay'; // Add this to your import section (include `d3-delaunay` via a script tag or npm if bundling)
+/*-----------------------------------------------------*/
+/*---------- constants and other definitions ----------*/
+/*-----------------------------------------------------*/
 
-// :)
-const planets = false;
+const planets = false; // :)
 
-let selectedChartSensors = new Set();
-let xyCanvas = null;
+let selectedChartSensors = new Set(); // used in custom charts section
+let xyCanvas = null; // time series graphs
+let accGroup = new THREE.Group(); // everything that moves
+let modelGroup = new THREE.Group(); accGroup.add(modelGroup); // all 3d models and stuff 
+let gpsLatKey = null;
+let gpsLonKey = null;
+let baseLat = 0;
+let baseLon = 0;
+let targetPosition = new THREE.Vector3(); // target position for the camera
+let trackOffset = new THREE.Vector3(0, 0, 0);
+let cameraOffset = new THREE.Vector3();
+let cameraOffsetFromAcc = new THREE.Vector3(0, 40, 80); // initial offset
+let carMovement = true;
+let cameraFollowCar = false;
+let userIsOrbiting = false;
+let cameraLockToAcc = false;
+let cameraHeadingOffset = 0;
+let timeSeriesGraphs = []; // Array of {id, canvas, chart, sensors, autoScale}
 
+const carModelScale = 0.03; // 0.03 seems right may need to be bigger
+const TRACK_SCALE = 10; // track ribbon and car path scale
+
+/*---------------------------------------------*/
 /*---------- random helper functions ----------*/
+/*---------------------------------------------*/
 
 /**
  * returns radians from degree value
@@ -55,6 +80,15 @@ function rgbToHex(r, g, b) {
   return parseInt(r.toString(16).padStart(2, '0') + g.toString(16).padStart(2, '0') + b.toString(16).padStart(2, '0'), 16);
 }
 
+/**
+ * returns x and z cords from lat and long cords
+ * @param {number} [lat] - latitude cord
+ * @param {number} [lon] - longitude cord
+ * @param {number} [baseLat] - (0,0) latitude cord
+ * @param {number} [baseLon] - (0,0) longitude cord
+ * @returns {object} {x: number, z: number}
+ * @example atLonToXZ(-40.006281,80.003567,-40,80) -> {x: 303.8379719362918, z: 698.4153342546194}
+*/
 function latLonToXZ(lat, lon, baseLat, baseLon) {
   const earthRadius = 6371000; // meters
   const dLat = (lat - baseLat) * Math.PI / 180;
@@ -66,14 +100,21 @@ function latLonToXZ(lat, lon, baseLat, baseLon) {
   return { x, z };
 }
 
-/*---------- ThreeJS section ----------*/
+console.log(latLonToXZ(-40.006281,80.003567,-40,80))
+
+/*---------------------------------------*/
+/*---------------------------------------*/
+/*---------- all threejs stuff ----------*/
+/*---------------------------------------*/
+/*----------------------------------------*/
+
 const scene = new THREE.Scene();
 const container = document.getElementById("threejs-container");
 const camera = new THREE.PerspectiveCamera(
-  75,
-  container.clientWidth / container.clientHeight,
-  0.1,
-  5000
+  75, // fov
+  container.clientWidth / container.clientHeight, // aspect
+  0.1, // near viewing distance
+  5000 // max view distance
 );
 
 const gltfLoader = new GLTFLoader();
@@ -90,7 +131,6 @@ window.addEventListener("resize", () => {
   camera.aspect = container.clientWidth / container.clientHeight;
   camera.updateProjectionMatrix();
 });
-
 
 camera.position.set(20, 30, 20);
 camera.lookAt(new THREE.Vector3(0, 0, 0));
@@ -133,29 +173,9 @@ function load3D(modelPath, posX = 0, posY = 0, posZ = 0, scaleX = 1, scaleY = 1,
   }, undefined, error => console.error(error));
 }
 
-
 const accPlanesArray = Array(20).fill().map(() => Array(5).fill(null));
 const accTextSprites = Array(20).fill().map(() => Array(5).fill(null));
 
-let accGroup = new THREE.Group(); // Holds model and planes
-let modelGroup = new THREE.Group();
-accGroup.add(modelGroup);
-let gpsLatKey = null;
-let gpsLonKey = null;
-let baseLat = 0;
-let baseLon = 0;
-let targetPosition = new THREE.Vector3();
-let trackOffset = new THREE.Vector3(0, 0, 0);
-let cameraOffset = new THREE.Vector3();
-let cameraOffsetFromAcc = new THREE.Vector3(0, 40, 80); // initial offset
-let carMovement = true;
-let cameraFollowCar = true;
-let userIsOrbiting = false;
-let cameraLockToAcc = false;
-
-
-const carModelScale = 0.03;
-const TRACK_SCALE = 10;
 scene.add(accGroup);
 
 function createTextTexture(message) {
@@ -208,7 +228,7 @@ function createPlanes() {
       const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
       const planeMesh = new THREE.Mesh(planeGeometry, planeMaterial);
       planeMesh.rotation.x = degToRad(-90);
-      planeMesh.position.set(((c * 70) + 30) * carModelScale, 198 * carModelScale, (-(r * 32) - (10 + ((r + 1 % 2) * r / 50))) * carModelScale);
+      planeMesh.position.set(((c * 70) + 30) * carModelScale, 278 * carModelScale, (-(r * 32) - (10 + ((r + 1 % 2) * r / 50))) * carModelScale);
       planeMesh.userData.index = { r, c };
       accGroup.add(planeMesh);
       modelGroup.add(planeMesh);
@@ -218,12 +238,89 @@ function createPlanes() {
       const spriteMaterial = new THREE.SpriteMaterial({ map: createTextTexture("...") });
       const sprite = new THREE.Sprite(spriteMaterial);
       sprite.scale.set(100 * carModelScale, 40 * carModelScale, 1 * carModelScale);
-      sprite.position.set(((c * 70) + 30) * carModelScale, 202.5 * carModelScale, (-(r * 32) - (10 + ((r + 1 % 2) * r / 50))) * carModelScale);
+      sprite.position.set(((c * 70) + 30) * carModelScale, 282.5 * carModelScale, (-(r * 32) - (10 + ((r + 1 % 2) * r / 50))) * carModelScale);
       accGroup.add(sprite);
       modelGroup.add(sprite);
       accTextSprites[r][c] = sprite;
     }
   }
+}
+
+let mode = "normal"
+let min = 100;
+let max = 0;
+function updateAccumulatorHeatmap() {
+  mode = document.getElementById("mode").value
+  const row = heatmapData[currentFrame];
+  if (!row) return;
+  let flatKeys = Object.keys(row).filter(k => k.startsWith("seg"));
+  const rawHeadingDeg = parseFloat(row["gps_direction[none]"]);
+  const normalizedDeg = ((rawHeadingDeg % 360) + 360) % 360;  // ensures 0–359
+  direction = degToRad(normalizedDeg);
+  console.log(direction)
+
+  const timeKey = Object.keys(row).find(k => k.toLowerCase().includes("time"));
+  if (timeKey) {
+    const minutes = (parseFloat(row[timeKey]) / 60).toFixed(2);
+    const label = document.getElementById("timeLabel");
+    if (label) label.innerText = `Time: ${minutes} min`;
+  }
+
+  if (mode == "scaled") {
+    min = 100; max = 0;
+    for (let r = 0; r < 16; r++) {
+      for (let c = 0; c < 5; c++) {
+        const index = r * 5 + c;
+        const key = flatKeys[index];
+        const value = parseFloat(row[key]);
+        if (value < min) min = value;
+        if (value > max) max = value;
+      }
+    }
+  }
+
+  for (let r = 0; r < 16; r++) {
+    for (let c = 0; c < 5; c++) {
+      const index = r * 5 + c;
+      const key = flatKeys[index];
+      const value = parseFloat(row[key]);
+      if (!isNaN(value)) {
+        const plane = accPlanesArray[r][c];
+        const text = accTextSprites[r][c];
+        plane.material.color = getColor(value);
+        text.material.map = createTextTexture(`${value.toFixed(1)}`);
+        text.material.needsUpdate = true;
+      }
+    }
+  }
+
+  // Only update chart if section is visible
+  const chartVisible = document.getElementById("chartSection")?.style.display === "block";
+  if (chartVisible) updateAllTimeSeriesGraphs();
+
+  const tireVisible = document.getElementById("tireSection")?.style.display === "block";
+  if (tireVisible) updateTireHeatmap();
+
+  const customVisible = document.getElementById("customGraphSection")?.style.display === "block";
+  if (customVisible) updateCustomGraphs();
+
+  if (gpsLatKey && gpsLonKey && heatmapData.length > 0) {
+    const row = heatmapData[currentFrame];
+    const lat = parseFloat(row[gpsLatKey]);
+    const lon = parseFloat(row[gpsLonKey]);
+  
+    const pos = latLonToXZ(lat, lon, baseLat, baseLon);
+    const newX = pos.x * TRACK_SCALE - trackOffset.x;
+    const newZ = pos.z * TRACK_SCALE - trackOffset.z;
+
+    if (Math.abs(newX) > 10000 || Math.abs(newZ) > 10000) {
+      targetPosition.set(0, 0.1, 0);
+    } else {
+      targetPosition.set(newX, 0.1, newZ);
+    }
+
+  }
+  
 }
 
 function getColor(temp) {
@@ -369,7 +466,6 @@ function createRibbonBetweenPaths(path1, path2) {
 }
 
 let earthOverlayMesh = null;
-
 const earthOverlayRotationDeg = 90;
 function createEarthOverlay(imageUrl, widthMeters, heightMeters) {
   const loader = new THREE.TextureLoader();
@@ -404,6 +500,49 @@ function segmentByLap(data, lapKey) {
   return laps;
 }
 
+// Increase smoothing factor (0.05 = smoother but slower, 1 = less smooth but more accurate turning(car doesnt lag behind on turning))
+const ROTATION_SMOOTHING = 1;
+
+function animate() {
+  if (!threeJSActive) return;
+  
+  if (carMovement) {
+    const target = normalizeAngleRad(direction);
+    const current = normalizeAngleRad(smoothedDirection);
+    let angleDiff = target - current;
+    if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+    if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+    smoothedDirection += angleDiff * ROTATION_SMOOTHING;
+  
+    modelGroup.rotation.set(0, -smoothedDirection + Math.PI / 2, 0);
+    accGroup.position.lerp(targetPosition, 0.1);
+  
+    if (cameraLockToAcc) {
+      const accCenter = accGroup.position.clone().add(new THREE.Vector3(0, 0.1, 0));
+      const radius = cameraOffsetFromAcc.length();
+      const angle = -smoothedDirection + cameraHeadingOffset;
+
+      const rotatedOffset = new THREE.Vector3(
+        radius * Math.sin(angle),
+        cameraOffsetFromAcc.y,
+        radius * Math.cos(angle)
+      );
+
+      camera.position.copy(accCenter.clone().add(rotatedOffset));
+    }
+  
+  }
+
+  if (!cameraLockToAcc) orbit.update();
+  renderer.render(scene, camera);
+}
+
+/*------------------------------------*/
+/*------------------------------------*/
+/*---------- all menu stuff ----------*/
+/*------------------------------------*/
+/*------------------------------------*/
+
 function loadCSVFromFile(file) {
   Papa.parse(file, {
     header: true,
@@ -416,25 +555,24 @@ function loadCSVFromFile(file) {
         });
         return cleaned;
       });
-
+      
       if (!heatmapData[0]) return;
-
+      
       const keys = Object.keys(heatmapData[0]);
-      const sensorSelect = document.getElementById("sensorSelect");
+      
       const xAxisSensor = document.getElementById("xAxisSensor");
       const yAxisSensor = document.getElementById("yAxisSensor");
       const customSensorSelect = document.getElementById("customSensors");
-
-      [sensorSelect, xAxisSensor, yAxisSensor, customSensorSelect].forEach(el => el.innerHTML = '');
+      
+      [ xAxisSensor, yAxisSensor, customSensorSelect ].forEach(el => el.innerHTML = '');
       keys.forEach(key => {
         if (!key.toLowerCase().includes("time")) {
           const option = new Option(key, key);
-          sensorSelect.appendChild(option);
           xAxisSensor.appendChild(option.cloneNode(true));
           yAxisSensor.appendChild(option.cloneNode(true));
           customSensorSelect.appendChild(option.cloneNode(true));
         }
-      });
+      });      
 
       gpsLatKey = keys.find(k => k.toLowerCase().includes("lat"));
       gpsLonKey = keys.find(k => k.toLowerCase().includes("lon"));
@@ -488,84 +626,6 @@ function loadCSVFromFile(file) {
       updateAccumulatorHeatmap();
     }
   });
-}
-
-
-let mode = "normal"
-let min = 100;
-let max = 0;
-function updateAccumulatorHeatmap() {
-  mode = document.getElementById("mode").value
-  const row = heatmapData[currentFrame];
-  if (!row) return;
-  let flatKeys = Object.keys(row).filter(k => k.startsWith("seg"));
-  const rawHeadingDeg = parseFloat(row["gps_direction[none]"]);
-  const normalizedDeg = ((rawHeadingDeg % 360) + 360) % 360;  // ensures 0–359
-  direction = degToRad(normalizedDeg);
-  console.log(direction)
-
-  const timeKey = Object.keys(row).find(k => k.toLowerCase().includes("time"));
-  if (timeKey) {
-    const minutes = (parseFloat(row[timeKey]) / 60).toFixed(2);
-    const label = document.getElementById("timeLabel");
-    if (label) label.innerText = `Time: ${minutes} min`;
-  }
-
-  if (mode == "scaled") {
-    min = 100; max = 0;
-    for (let r = 0; r < 16; r++) {
-      for (let c = 0; c < 5; c++) {
-        const index = r * 5 + c;
-        const key = flatKeys[index];
-        const value = parseFloat(row[key]);
-        if (value < min) min = value;
-        if (value > max) max = value;
-      }
-    }
-  }
-
-  for (let r = 0; r < 16; r++) {
-    for (let c = 0; c < 5; c++) {
-      const index = r * 5 + c;
-      const key = flatKeys[index];
-      const value = parseFloat(row[key]);
-      if (!isNaN(value)) {
-        const plane = accPlanesArray[r][c];
-        const text = accTextSprites[r][c];
-        plane.material.color = getColor(value);
-        text.material.map = createTextTexture(`${value.toFixed(1)}`);
-        text.material.needsUpdate = true;
-      }
-    }
-  }
-
-  // Only update chart if section is visible
-  const chartVisible = document.getElementById("chartSection")?.style.display === "block";
-  if (chartVisible) updateTimeSeriesChart();
-
-  const tireVisible = document.getElementById("tireSection")?.style.display === "block";
-  if (tireVisible) updateTireHeatmap();
-
-  const customVisible = document.getElementById("customGraphSection")?.style.display === "block";
-  if (customVisible) updateCustomGraphs();
-
-  if (gpsLatKey && gpsLonKey && heatmapData.length > 0) {
-    const row = heatmapData[currentFrame];
-    const lat = parseFloat(row[gpsLatKey]);
-    const lon = parseFloat(row[gpsLonKey]);
-  
-    const pos = latLonToXZ(lat, lon, baseLat, baseLon);
-    const newX = pos.x * TRACK_SCALE - trackOffset.x;
-    const newZ = pos.z * TRACK_SCALE - trackOffset.z;
-
-    if (Math.abs(newX) > 10000 || Math.abs(newZ) > 10000) {
-      targetPosition.set(0, 0.1, 0);
-    } else {
-      targetPosition.set(newX, 0.1, newZ);
-    }
-
-  }
-  
 }
 
 function togglePlayPause() {
@@ -658,39 +718,6 @@ function normalizeAngleRad(angle) {
   return (angle + Math.PI * 2) % (Math.PI * 2);
 }
 
-// Increase smoothing factor (0.05 = smoother but slower)
-const ROTATION_SMOOTHING = 1;
-
-function animate() {
-  if (!threeJSActive) return;
-  
-  if (carMovement) {
-    const target = normalizeAngleRad(direction);
-    const current = normalizeAngleRad(smoothedDirection);
-    let angleDiff = target - current;
-    if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-    if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-    smoothedDirection += angleDiff * ROTATION_SMOOTHING;
-  
-    modelGroup.rotation.set(0, -smoothedDirection + Math.PI / 2, 0);
-    accGroup.position.lerp(targetPosition, 0.1);
-  
-    if (cameraLockToAcc) {
-      const accCenter = targetPosition.clone().add(new THREE.Vector3(0, 0.1, 0)); // position of the car
-      const rotatedOffset = cameraOffsetFromAcc.clone().applyAxisAngle(
-        new THREE.Vector3(0, 1, 0),
-        -smoothedDirection
-      );
-      camera.position.copy(accCenter.clone().add(rotatedOffset)); // No lerp = fixed offset
-      orbit.target.copy(accCenter); // lock target as well
-    }
-  
-  }
-
-  orbit.update();
-  renderer.render(scene, camera);
-}
-
 function getAccCenterWorldPosition() {
   const centerR = 7;
   const centerC = 2;
@@ -712,7 +739,6 @@ function getAccCenterWorldPosition() {
 
   return rotated;
 }
-
 
 // Predefined color palette
 const predefinedColors = [
@@ -754,7 +780,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="toggleThreeJSBtn">Pause 3D</button>
     <button id="toggleChassisBtn">Toggle Chassis Transparency</button><br>
     <button id="toggleCarMovementBtn">Disable car movement</button>
-    <button id="toggleCameraFollowBtn">Disable Camera Follow</button><br>
+    <button id="toggleCameraFollowBtn">Lock camera to car</button><br>
     <button id="toggleOverlayBtn">Toggle Earth Overlay</button> 
     <input type="range" min="0" max="1" step="0.01" value="1" id="overlayOpacity"> <br>
     Speed: <input type="range" id="speedSlider" min="1000" max="2000" value="2000" step="100" /><br>
@@ -762,24 +788,20 @@ window.addEventListener('DOMContentLoaded', () => {
     Temp Max: <input type="number" id="maxTempSlider" min="20" max="100" value="60" step="2" /><br>
   `);
   
-  const section2 = createExpandableSection("Sensor Selection & Chart", 'chartSection',`
-    <label for="sensorSelect">Select Sensors:</label><br>
-    <select id="sensorSelect" multiple size="10" style="width: 100%"></select><br><br>
-  
-    <button id="addSensorsBtn">Add to Graph</button>
-    <button id="removeSensorsBtn">Remove from Graph</button><br><br>
-  
+  const section2 = createExpandableSection("Sensor Selection & Chart", 'chartSection',`WS  
     <label for="yMin">Y-Min:</label>
-    <input type="number" id="yMin" value="20" step="0.1"><t>
+    <input type="number" id="yMin" value="20" step="0.1">
   
     <label for="yMax">Y-Max:</label>
     <input type="number" id="yMax" value="60" step="0.1"><br><br>
   
-    <label for="timeWindow">Time Window (seconds):</label>
+    <label for="timeWindSow">Time Window (seconds):</label>
     <input type="number" id="timeWindow" value="10" min="1" max="300" step="1"><br><br>
   
-    <canvas id="timeSeriesChart" width="600" height="300"></canvas>    
-  `);
+    <button id="createTimeSeriesGraphBtn">Add New Time Series Graph</button><br><br>
+  
+    <div id="timeSeriesGraphsContainer"></div>
+  `);  
 
   const section3 = createExpandableSection("Tire Data & Pedal Inputs", 'tireSection',`
     <label for="tireMin">Min Temp:</label>
@@ -847,7 +869,6 @@ window.addEventListener('DOMContentLoaded', () => {
   let xAxisSensor, yAxisSensor;
 
   document.body.appendChild(controls);
-  initChart();
 
   xAxisSensor = document.getElementById("xAxisSensor");
   yAxisSensor = document.getElementById("yAxisSensor");
@@ -861,14 +882,10 @@ window.addEventListener('DOMContentLoaded', () => {
   const carMovementButton = document.getElementById("toggleCarMovementBtn");
   const cameraFollowBtn = document.getElementById("toggleCameraFollowBtn");
   const maxTempSlider = document.getElementById("maxTempSlider");
-  const sensorSelect = document.getElementById("sensorSelect");
-  const addSensorsBtn = document.getElementById("addSensorsBtn");
-  const removeSensorsBtn = document.getElementById("removeSensorsBtn");
   const yMinInput = document.getElementById("yMin");
   const yMaxInput = document.getElementById("yMax");
   const timeWindowInput = document.getElementById("timeWindow");
   const startChartBtn = document.getElementById("startChartBtn");
-  const timeSeriesCanvas = document.getElementById("timeSeriesChart");  
 
   const timeLabel = document.createElement('div');
   timeLabel.id = 'timeLabel';
@@ -922,19 +939,32 @@ window.addEventListener('DOMContentLoaded', () => {
     cameraLockToAcc = !cameraLockToAcc;
     cameraFollowBtn.innerText = cameraLockToAcc ? "Unlock Camera" : "Lock Camera to Accumulator";
   
+    const accCenter = getAccCenterWorldPosition();
+    cameraOffsetFromAcc = camera.position.clone().sub(accCenter);
+
+    const offsetXZ = cameraOffsetFromAcc.clone();
+    offsetXZ.y = 0;
+
+    const currentCameraAngle = Math.atan2(offsetXZ.x, offsetXZ.z);
+    cameraHeadingOffset = currentCameraAngle + smoothedDirection;
+
     if (cameraLockToAcc) {
-      const accCenter = getAccCenterWorldPosition();
-      cameraOffsetFromAcc = camera.position.clone().sub(accCenter);
-    
+      // Disable OrbitControls and stop internal rotation drift
       orbit.enabled = false;
-      orbit.enablePan = false;
+      orbit.reset();
     } else {
+      // Re-enable full OrbitControls
       orbit.enabled = true;
       orbit.enablePan = true;
-    }
-    
-  });  
+      orbit.enableZoom = true;
+      orbit.enableRotate = true;
+      orbit.enableDamping = true;
+      orbit.dampingFactor = 0.1;
   
+      orbit.update(); // refresh
+    }
+  });
+    
   document.getElementById("toggleOverlayBtn").addEventListener("click", () => {
     if (!earthOverlayMesh) return;
     earthOverlayMesh.visible = !earthOverlayMesh.visible;
@@ -961,26 +991,15 @@ window.addEventListener('DOMContentLoaded', () => {
     if (earthOverlayMesh) {
       earthOverlayMesh.material.opacity = parseFloat(e.target.value);
     }
-  });  
+  });
 
-  addSensorsBtn.addEventListener("click", () => {
-    const selected = Array.from(document.getElementById("sensorSelect").selectedOptions).map(o => o.value);
-    selected.forEach(sensor => selectedChartSensors.add(sensor));
-    console.log("Added sensors:", Array.from(selectedChartSensors));
-    updateTimeSeriesChart();
-  });
-  
-  removeSensorsBtn.addEventListener("click", () => {
-    const selected = Array.from(document.getElementById("sensorSelect").selectedOptions).map(o => o.value);
-    selected.forEach(sensor => selectedChartSensors.delete(sensor));
-    updateTimeSeriesChart();
-  });
+  document.getElementById("createTimeSeriesGraphBtn").addEventListener("click", createTimeSeriesGraph);
 
   xyCanvas = document.getElementById("xyChart");
   document.getElementById("renderCustomGraphBtn").addEventListener("click", renderCustomGraph);
 });
 
-function createExpandableSection(titleText, sectionId = "", contentHTML, ) {
+function createExpandableSection(titleText, sectionId = "", contentHTML, editable = false, isIndented = false) {
   const section = document.createElement('div');
   section.style.marginBottom = '10px';
 
@@ -988,38 +1007,67 @@ function createExpandableSection(titleText, sectionId = "", contentHTML, ) {
   header.style.cursor = 'pointer';
   header.style.display = 'flex';
   header.style.alignItems = 'center';
-  header.style.fontWeight = 'bold';
+  header.style.justifyContent = 'space-between';
+  header.style.background = '#f0f0f0';
+  header.style.padding = '6px 10px';
+  header.style.borderRadius = '6px';
+
+  const left = document.createElement('div');
+  left.style.display = 'flex';
+  left.style.alignItems = 'center';
 
   const arrow = document.createElement('span');
-  arrow.textContent = '▶';
-  arrow.style.marginRight = '6px';
+  arrow.innerHTML = '▸'; // unicode arrow
+  arrow.style.marginRight = '8px';
   arrow.style.transition = 'transform 0.2s';
 
-  const title = document.createElement('span');
-  title.textContent = titleText;
+  const title = document.createElement(editable ? 'input' : 'span');
+  if (editable) {
+    title.type = "text";
+    title.value = titleText;
+    title.style.border = 'none';
+    title.style.background = 'transparent';
+    title.style.fontWeight = 'bold';
+    title.style.outline = 'none';
+    title.style.width = '200px';
+  } else {
+    title.textContent = titleText;
+    title.style.fontWeight = 'bold';
+  }
+
+  left.appendChild(arrow);
+  left.appendChild(title);
+  header.appendChild(left);
 
   const content = document.createElement('div');
   content.innerHTML = contentHTML;
   content.style.display = 'none';
-  content.style.marginTop = '5px';
+  content.style.marginTop = '8px';
   if (sectionId) content.id = sectionId;
 
-  header.appendChild(arrow);
-  header.appendChild(title);
+  if (isIndented) {
+    header.style.marginLeft = '20px'; // apply indent
+  }
+  
   section.appendChild(header);
+  
   section.appendChild(content);
 
   header.addEventListener('click', () => {
     const isOpen = content.style.display === 'block';
     content.style.display = isOpen ? 'none' : 'block';
-    arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+    arrow.innerHTML = isOpen ? '▸' : '▾';
   });
 
   return section;
 }
 
 
-/*---------- chart.js section ----------*/
+/*-------------------------------------*/
+/*-------------------------------------*/
+/*---------- chartjs section ----------*/
+/*-------------------------------------*/
+/*-------------------------------------*/
 
 /**
  * returns the data object 
@@ -1041,6 +1089,86 @@ function getGraphElement(data, config){
 }
 
 let timeSeriesChart = null;
+
+function createTimeSeriesGraph() {
+  const graphId = `timeSeries-${Date.now()}`;
+  const nameInput = prompt("Enter a name for this graph:", `Graph ${timeSeriesGraphs.length + 1}`);
+  const title = nameInput?.trim() || `Graph ${timeSeriesGraphs.length + 1}`;
+
+  const innerHTML = `
+    <canvas width="600" height="300"></canvas><br>
+    <select multiple size="6" style="width: 100%"></select><br>
+    <button class="addSensorBtn">Add Sensor(s)</button>
+    <button class="removeSensorBtn" style="margin-left: 10px;">Remove Sensor(s)</button><br><br>
+    <label><input type="checkbox" class="autoScaleCheckbox" checked> Auto-scale Y</label>
+    <button class="deleteGraphBtn" style="margin-left: 10px;">Delete Graph</button>
+  `;
+
+  const section = createExpandableSection(title, "", innerHTML, true, true); // last "true" means indented
+  section.classList.add("draggable-graph");
+  section.classList.add("draggable-graph", "subTimeSeriesSection");
+  document.getElementById("timeSeriesGraphsContainer").appendChild(section);
+
+  const canvas = section.querySelector("canvas");
+  const select = section.querySelector("select");
+  const addBtn = section.querySelector(".addSensorBtn");
+  const removeBtn = section.querySelector(".removeSensorBtn");
+  const autoScale = section.querySelector(".autoScaleCheckbox");
+  const deleteBtn = section.querySelector(".deleteGraphBtn");
+
+  Object.keys(heatmapData[0]).forEach(key => {
+    if (!key.toLowerCase().includes("time")) {
+      const opt = new Option(key, key);
+      select.appendChild(opt);
+    }
+  });
+
+  const chart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets: [] },
+    options: {
+      responsive: false,
+      animation: false,
+      scales: {
+        x: { type: "linear", title: { display: true, text: "Time (s)" } },
+        y: { title: { display: true, text: "Value" } }
+      },
+      plugins: { legend: { display: true } }
+    }
+  });
+
+  const graphObj = { id: graphId, canvas, chart, select, autoScale };
+  timeSeriesGraphs.push(graphObj);
+
+  addBtn.addEventListener("click", () => {
+    const selected = Array.from(select.selectedOptions).map(o => o.value);
+    const existing = new Set(chart.data.datasets.map(ds => ds.label));
+    selected.forEach(sensor => {
+      if (!existing.has(sensor)) {
+        chart.data.datasets.push({
+          label: sensor,
+          borderColor: getPersistentColor(sensor),
+          data: [],
+          fill: false,
+          tension: 0.4,
+          pointRadius: 0
+        });
+      }
+    });
+    chart.update();
+  });
+
+  removeBtn.addEventListener("click", () => {
+    const selected = Array.from(select.selectedOptions).map(o => o.value);
+    chart.data.datasets = chart.data.datasets.filter(ds => !selected.includes(ds.label));
+    chart.update();
+  });
+
+  deleteBtn.addEventListener("click", () => {
+    section.remove();
+    timeSeriesGraphs = timeSeriesGraphs.filter(g => g.id !== graphId);
+  });
+}
 
 function initChart() {
   const ctx = document.getElementById("timeSeriesChart").getContext("2d");
@@ -1428,6 +1556,12 @@ function drawCustomBars(ctx, sensors) {
   });
 }
 
+/*-------------------------------------------*/
+/*-------------------------------------------*/
+/*---------- calling threejs stuff ----------*/
+/*-------------------------------------------*/
+/*-------------------------------------------*/
+
 camera.position.x = 100;
 camera.position.z = 100;
 camera.position.y = 300;
@@ -1441,10 +1575,9 @@ const cameraRig = new THREE.Group();
 scene.add(cameraRig);
 
 cameraRig.add(camera);
-camera.position.set(0, 4, 8); // behind and above car
-camera.lookAt(0, 0, 0);
-orbit.enablePan = false;      // optional: prevent drifting
-orbit.enableZoom = true;      // keep this if you want zoom
+camera.position.set(-10, 30, -100); // infront and above car
+orbit.enablePan = true; 
+orbit.enableZoom = true;    
 orbit.enableDamping = true;   // smooth orbiting
 orbit.dampingFactor = 0.1;
 // Store initial distance vector

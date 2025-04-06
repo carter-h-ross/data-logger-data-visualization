@@ -8,93 +8,6 @@
 		{
 			"name":"Scene",
 			"nodes":[
-				21
-			]
-		}
-	],
-	"nodes":[
-		{
-			"mesh":0,
-			"name":"Node13"
-		},
-		{
-			"mesh":1,
-			"name":"Node14"
-		},
-		{
-			"mesh":2,
-			"name":"Node15"
-		},
-		{
-			"mesh":3,
-			"name":"Node17"
-		},
-		{
-			"mesh":4,
-			"name":"Node18"
-		},
-		{
-			"mesh":5,
-			"name":"Node2"
-		},
-		{
-			"mesh":6,
-			"name":"Node20"
-		},
-		{
-			"mesh":7,
-			"name":"Node29"
-		},
-		{
-			"mesh":8,
-			"name":"Node30"
-		},
-		{
-			"mesh":9,
-			"name":"Node31"
-		},
-		{
-			"mesh":10,
-			"name":"Node32"
-		},
-		{
-			"mesh":11,
-			"name":"Node33"
-		},
-		{
-			"mesh":12,
-			"name":"Node34"
-		},
-		{
-			"mesh":13,
-			"name":"Node35"
-		},
-		{
-			"mesh":14,
-			"name":"Node36"
-		},
-		{
-			"mesh":15,
-			"name":"Node37"
-		},
-		{
-			"mesh":16,
-			"name":"Node38"
-		},
-		{
-			"mesh":17,
-			"name":"Node5"
-		},
-		{
-			"mesh":18,
-			"name":"Node6"
-		},
-		{
-			"mesh":19,
-			"name":"Node8"
-		},
-		{
-			"children":[
 				0,
 				1,
 				2,
@@ -114,16 +27,199 @@
 				16,
 				17,
 				18,
-				19
-			],
-			"mesh":20,
-			"name":"Node1"
+				19,
+				20
+			]
+		}
+	],
+	"nodes":[
+		{
+			"name":"Node0",
+			"translation":[
+				0,
+				80,
+				0
+			]
 		},
 		{
-			"children":[
-				20
-			],
-			"name":"Node0"
+			"mesh":0,
+			"name":"Node13",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":1,
+			"name":"Node14",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":2,
+			"name":"Node15",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":3,
+			"name":"Node17",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":4,
+			"name":"Node18",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":5,
+			"name":"Node2",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":6,
+			"name":"Node20",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":7,
+			"name":"Node29",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":8,
+			"name":"Node30",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":9,
+			"name":"Node31",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":10,
+			"name":"Node32",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":11,
+			"name":"Node33",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":12,
+			"name":"Node34",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":13,
+			"name":"Node35",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":14,
+			"name":"Node36",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":15,
+			"name":"Node37",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":16,
+			"name":"Node38",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":17,
+			"name":"Node5",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":18,
+			"name":"Node6",
+			"translation":[
+				0,
+				80,
+				0
+			]
+		},
+		{
+			"mesh":19,
+			"name":"Node8",
+			"translation":[
+				0,
+				80,
+				0
+			]
 		}
 	],
 	"materials":[
@@ -645,19 +741,6 @@
 						"NORMAL":58
 					},
 					"indices":59,
-					"material":18
-				}
-			]
-		},
-		{
-			"name":"Mesh0",
-			"primitives":[
-				{
-					"attributes":{
-						"POSITION":60,
-						"NORMAL":61
-					},
-					"indices":62,
 					"material":18
 				}
 			]
@@ -1223,34 +1306,6 @@
 			"componentType":5123,
 			"count":11772,
 			"type":"SCALAR"
-		},
-		{
-			"bufferView":60,
-			"componentType":5126,
-			"count":38770,
-			"max":[
-				413.0390930175781,
-				39.334320068359375,
-				-94.69699096679688
-			],
-			"min":[
-				388.52374267578125,
-				19.834320068359375,
-				-284.1613464355469
-			],
-			"type":"VEC3"
-		},
-		{
-			"bufferView":61,
-			"componentType":5126,
-			"count":38770,
-			"type":"VEC3"
-		},
-		{
-			"bufferView":62,
-			"componentType":5123,
-			"count":48972,
-			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
@@ -1613,29 +1668,11 @@
 			"byteLength":23544,
 			"byteOffset":79793404,
 			"target":34963
-		},
-		{
-			"buffer":0,
-			"byteLength":465240,
-			"byteOffset":79816948,
-			"target":34962
-		},
-		{
-			"buffer":0,
-			"byteLength":465240,
-			"byteOffset":80282188,
-			"target":34962
-		},
-		{
-			"buffer":0,
-			"byteLength":97944,
-			"byteOffset":80747428,
-			"target":34963
 		}
 	],
 	"buffers":[
 		{
-			"byteLength":80845372,
+			"byteLength":79816948,
 			"uri":"accumulator.bin"
 		}
 	]
