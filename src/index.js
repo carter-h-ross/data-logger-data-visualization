@@ -25,6 +25,8 @@ import Chart from 'chart.js/auto';
 import { getRelativePosition } from 'chart.js/helpers';
 import {Colors} from 'chart.js'
 Chart.register(Colors);
+import annotationPlugin from 'chartjs-plugin-annotation';
+Chart.register(annotationPlugin);
 
 /*-----------------------------------------------------*/
 /*---------- constants and other definitions ----------*/
@@ -244,39 +246,6 @@ function createPlanes() {
       accTextSprites[r][c] = sprite;
     }
   }
-}
-
-function updateAllTimeSeriesGraphs() {
-  if (heatmapData.length === 0) return;
-  const row = heatmapData[currentFrame];
-  const timeKey = Object.keys(row).find(k => k.toLowerCase().includes("time"));
-  if (!timeKey) return;
-  const currentTime = parseFloat(row[timeKey]);
-
-  timeSeriesGraphs.forEach(graph => {
-    const chart = graph.chart;
-    const autoScale = graph.autoScale.checked;
-
-    chart.data.datasets.forEach(dataset => {
-      const sensor = dataset.label;
-      const value = parseFloat(row[sensor]);
-      if (!isNaN(value)) {
-        dataset.data.push({ x: currentTime, y: value });
-      }
-
-      // Limit to last N points if needed
-      if (dataset.data.length > 3000) {
-        dataset.data.shift();  // prevent memory bloat
-      }
-    });
-
-    if (autoScale) {
-      chart.options.scales.y.min = undefined;
-      chart.options.scales.y.max = undefined;
-    }
-
-    chart.update("none");
-  });
 }
 
 let mode = "normal"
@@ -821,7 +790,9 @@ window.addEventListener('DOMContentLoaded', () => {
     Temp Max: <input type="number" id="maxTempSlider" min="20" max="100" value="60" step="2" /><br>
   `);
   
-  const section2 = createExpandableSection("Sensor Selection & Chart", 'chartSection',`WS  
+  const section2 = createExpandableSection("Sensor Selection & Chart", 'chartSection',`  
+    <button id="fullscreenGraphsBtn">View All Graphs Fullscreen</button><br><br>
+    
     <label for="yMin">Y-Min:</label>
     <input type="number" id="yMin" value="20" step="0.1">
   
@@ -1026,6 +997,76 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  document.getElementById("fullscreenGraphsBtn").addEventListener("click", () => {
+    const overlay = document.getElementById("fullscreenGraphOverlay");
+    const container = document.getElementById("fullscreenGraphsContainer");
+    container.innerHTML = ""; // Clear old
+  
+    const numGraphs = timeSeriesGraphs.length;
+    const rows = Math.min(numGraphs, 3); // max 3 visible rows
+  
+    container.style.display = "grid";
+    container.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+    container.style.gridTemplateColumns = "1fr";
+    container.style.height = "93vh";
+    container.style.overflowY = numGraphs > 3 ? "scroll" : "hidden";
+    container.style.background = "#fff";
+  
+    timeSeriesGraphs.forEach(graph => {
+      const wrapper = document.createElement("div");
+      wrapper.style.width = "100%";
+      wrapper.style.height = `${90 / rows}vh`; // 100% / rows visible
+      wrapper.style.boxSizing = "border-box";
+      wrapper.style.borderBottom = "1px solid #ccc";
+      wrapper.style.padding = "10px";
+  
+      const canvas = document.createElement("canvas");
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      wrapper.appendChild(canvas);
+      container.appendChild(wrapper);
+  
+      new Chart(canvas.getContext("2d"), {
+        type: "line",
+        data: {
+          datasets: graph.chart.data.datasets.map(ds => ({
+            label: ds.label,
+            data: ds.data,
+            borderColor: ds.borderColor,
+            borderWidth: ds.borderWidth,
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0
+          }))
+        },
+        options: {
+          responsive: true,
+          animation: false,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: "linear",
+              title: { display: true, text: "Time (s)" }
+            },
+            y: {
+              title: { display: true, text: "Value" }
+            }
+          },
+          plugins: {
+            legend: { display: true }
+          }
+        }
+      });
+    });
+  
+    overlay.style.display = "block";
+  });  
+  
+  document.getElementById("closeFullscreenGraphs").addEventListener("click", () => {
+    document.getElementById("fullscreenGraphOverlay").style.display = "none";
+  });
+  
+
   document.getElementById("createTimeSeriesGraphBtn").addEventListener("click", createTimeSeriesGraph);
 
   xyCanvas = document.getElementById("xyChart");
@@ -1123,6 +1164,61 @@ function getGraphElement(data, config){
 
 let timeSeriesChart = null;
 
+function updateAllTimeSeriesGraphs() {
+  if (heatmapData.length === 0) return;
+  const row = heatmapData[currentFrame];
+  const timeKey = Object.keys(row).find(k => k.toLowerCase().includes("time"));
+  if (!timeKey) return;
+  const currentTime = parseFloat(row[timeKey]);
+
+  timeSeriesGraphs.forEach(graph => {
+    const chart = graph.chart;
+    const autoScale = graph.autoScale.checked;
+    const secondsBack = parseFloat(graph.secondsBackInput?.value || 10);
+    const showFullRun = graph.showFullRunBtn?.dataset?.showFullRun === "true";
+    const lineWidth = parseInt(graph.lineWidthSlider?.value || 2);
+
+    chart.data.datasets.forEach(dataset => {
+      const sensor = dataset.label;
+      const value = parseFloat(row[sensor]);
+
+      if (!isNaN(value)) {
+        // If full run and dataset already filled, do nothing
+        if (!showFullRun) {
+          dataset.data.push({ x: currentTime, y: value });
+          const cutoff = currentTime - secondsBack;
+          dataset.data = dataset.data.filter(pt => pt.x >= cutoff);
+        }
+        dataset.borderWidth = lineWidth;
+      }
+    });
+
+    // Vertical timeline line
+    chart.options.plugins.annotation.annotations.timeLine = {
+      type: 'line',
+      xMin: currentTime,
+      xMax: currentTime,
+      borderColor: 'green',
+      borderWidth: 2
+    };
+
+    if (autoScale) {
+      chart.options.scales.y.min = undefined;
+      chart.options.scales.y.max = undefined;
+    }
+
+    if (!showFullRun) {
+      chart.options.scales.x.min = currentTime - secondsBack;
+      chart.options.scales.x.max = currentTime;
+    } else {
+      chart.options.scales.x.min = undefined;
+      chart.options.scales.x.max = undefined;
+    }
+
+    chart.update("none");
+  });
+}
+
 function createTimeSeriesGraph() {
   const graphId = `timeSeries-${Date.now()}`;
   const nameInput = prompt("Enter a name for this graph:", `Graph ${timeSeriesGraphs.length + 1}`);
@@ -1133,12 +1229,14 @@ function createTimeSeriesGraph() {
     <select multiple size="6" style="width: 100%"></select><br>
     <button class="addSensorBtn">Add Sensor(s)</button>
     <button class="removeSensorBtn" style="margin-left: 10px;">Remove Sensor(s)</button><br><br>
-    <label><input type="checkbox" class="autoScaleCheckbox" checked> Auto-scale Y</label>
-    <button class="deleteGraphBtn" style="margin-left: 10px;">Delete Graph</button>
+    <label><input type="checkbox" class="autoScaleCheckbox" checked> Auto-scale Y</label><br>
+    <label>Seconds Back: <input type="number" class="secondsBackInput" value="10" min="1" style="width:60px;"></label>
+    <button class="showFullRunBtn" data-show-full-run="false">Show Full Run</button><br>
+    <label>Line Width: <input type="range" class="lineWidthSlider" min="1" max="6" value="2" /></label><br>
+    <button class="deleteGraphBtn" style="margin-top: 8px;">Delete Graph</button>
   `;
 
-  const section = createExpandableSection(title, "", innerHTML, true, true); // last "true" means indented
-  section.classList.add("draggable-graph");
+  const section = createExpandableSection(title, "", innerHTML, true, true);
   section.classList.add("draggable-graph", "subTimeSeriesSection");
   document.getElementById("timeSeriesGraphsContainer").appendChild(section);
 
@@ -1148,11 +1246,13 @@ function createTimeSeriesGraph() {
   const removeBtn = section.querySelector(".removeSensorBtn");
   const autoScale = section.querySelector(".autoScaleCheckbox");
   const deleteBtn = section.querySelector(".deleteGraphBtn");
+  const secondsBackInput = section.querySelector(".secondsBackInput");
+  const showFullRunBtn = section.querySelector(".showFullRunBtn");
+  const lineWidthSlider = section.querySelector(".lineWidthSlider");
 
   Object.keys(heatmapData[0]).forEach(key => {
     if (!key.toLowerCase().includes("time")) {
-      const opt = new Option(key, key);
-      select.appendChild(opt);
+      select.appendChild(new Option(key, key));
     }
   });
 
@@ -1166,28 +1266,78 @@ function createTimeSeriesGraph() {
         x: { type: "linear", title: { display: true, text: "Time (s)" } },
         y: { title: { display: true, text: "Value" } }
       },
-      plugins: { legend: { display: true } }
-    }
+      plugins: {
+        legend: { display: true },
+        annotation: {
+          annotations: {}
+        }
+      }
+    },
+    plugins: [Chart.registry.getPlugin('annotation')]
   });
 
-  const graphObj = { id: graphId, canvas, chart, select, autoScale };
+  // Click to seek
+  canvas.onclick = evt => {
+    const timeKey = Object.keys(heatmapData[0]).find(k => k.toLowerCase().includes("time"));
+    if (!timeKey) return;
+    const pos = getRelativePosition(evt, chart);
+    const xValue = chart.scales.x.getValueForPixel(pos.x);
+
+    const closest = heatmapData.reduce((best, row, i) => {
+      const time = parseFloat(row[timeKey]);
+      if (!isNaN(time) && Math.abs(time - xValue) < Math.abs(best.diff)) {
+        return { index: i, diff: time - xValue };
+      }
+      return best;
+    }, { index: 0, diff: Infinity });
+
+    currentFrame = closest.index;
+    document.getElementById("timeSlider").value = currentFrame;
+    updateAccumulatorHeatmap();
+  };
+
+  const graphObj = {
+    id: graphId,
+    canvas,
+    chart,
+    select,
+    autoScale,
+    secondsBackInput,
+    showFullRunBtn,
+    lineWidthSlider
+  };
   timeSeriesGraphs.push(graphObj);
 
   addBtn.addEventListener("click", () => {
     const selected = Array.from(select.selectedOptions).map(o => o.value);
     const existing = new Set(chart.data.datasets.map(ds => ds.label));
+    const timeKey = Object.keys(heatmapData[0]).find(k => k.toLowerCase().includes("time"));
+    const showFullRun = showFullRunBtn.dataset.showFullRun === "true";
+
     selected.forEach(sensor => {
       if (!existing.has(sensor)) {
-        chart.data.datasets.push({
+        const dataset = {
           label: sensor,
           borderColor: getPersistentColor(sensor),
           data: [],
           fill: false,
           tension: 0.4,
-          pointRadius: 0
-        });
+          pointRadius: 0,
+          borderWidth: parseInt(lineWidthSlider.value)
+        };
+
+        if (showFullRun && timeKey) {
+          dataset.data = heatmapData.map(row => {
+            const x = parseFloat(row[timeKey]);
+            const y = parseFloat(row[sensor]);
+            return (!isNaN(x) && !isNaN(y)) ? { x, y } : null;
+          }).filter(Boolean);
+        }
+
+        chart.data.datasets.push(dataset);
       }
     });
+
     chart.update();
   });
 
@@ -1200,6 +1350,32 @@ function createTimeSeriesGraph() {
   deleteBtn.addEventListener("click", () => {
     section.remove();
     timeSeriesGraphs = timeSeriesGraphs.filter(g => g.id !== graphId);
+  });
+
+  showFullRunBtn.addEventListener("click", () => {
+    const isFull = showFullRunBtn.dataset.showFullRun === "true";
+    showFullRunBtn.dataset.showFullRun = isFull ? "false" : "true";
+    showFullRunBtn.textContent = isFull ? "Show Full Run" : "Show Recent Only";
+
+    const timeKey = Object.keys(heatmapData[0]).find(k => k.toLowerCase().includes("time"));
+    if (!timeKey) return;
+
+    if (!isFull) {
+      // Load all data for each sensor
+      chart.data.datasets.forEach(dataset => {
+        const sensor = dataset.label;
+        dataset.data = heatmapData.map(row => {
+          const x = parseFloat(row[timeKey]);
+          const y = parseFloat(row[sensor]);
+          return (!isNaN(x) && !isNaN(y)) ? { x, y } : null;
+        }).filter(Boolean);
+      });
+    } else {
+      // Switch to recent mode – reset to just current value
+      chart.data.datasets.forEach(ds => ds.data = []);
+    }
+
+    chart.update();
   });
 }
 
@@ -1255,7 +1431,7 @@ function initChart() {
   });
 }
 
-
+/*
 function updateTimeSeriesChart() {
   if (!timeSeriesChart || heatmapData.length === 0) return;
 
@@ -1296,6 +1472,7 @@ function updateTimeSeriesChart() {
 
   timeSeriesChart.update();
 }
+*/
 
 function drawPedalBars(throttle, brakeF, brakeR) {
   if ([throttle, brakeF, brakeR].some(v => isNaN(v))) {
@@ -1385,7 +1562,6 @@ function drawSpeedometer(speed) {
 
 let xyChart = null;
 let customGraphs = [];
-
 
 function updateXYChart() {
   const xKey = xAxisSensor.value;

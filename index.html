@@ -58,6 +58,46 @@
     input[type="range"] {
       width: 200px;
     }
+
+    #fullscreenGraphOverlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: white;
+      overflow: auto;
+      z-index: 9999;
+      display: none;
+      box-sizing: border-box;
+    }
+
+    #closeFullscreenGraphs {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 5vh;
+      background: #f0f0f0;
+      border: none;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 10000;
+    }
+
+    #fullscreenGraphsContainer {
+      margin-top: 5vh;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .fullscreen-graph {
+      width: 100%;
+      height: calc(95vh / 3);
+    }
   </style>
 </head>
 <body>
@@ -66,7 +106,11 @@
     <canvas id="bg"></canvas>
   </div>
 
+  <div id="fullscreenGraphOverlay">
+    <button id="closeFullscreenGraphs">Close</button>
+    <div id="fullscreenGraphsContainer"></div>
+  </div>
+
   <script src="bundle.js"></script>
-  
 </body>
 </html>
