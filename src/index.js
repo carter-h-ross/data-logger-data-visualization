@@ -782,7 +782,6 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="toggleThreeJSBtn">Pause 3D</button>
     <button id="toggleChassisBtn">Toggle Chassis Transparency</button><br>
     <button id="toggleCarMovementBtn">Disable car movement</button>
-    <button id="toggleCameraFollowBtn">Lock camera to car</button><br>
     <button id="toggleOverlayBtn">Toggle Earth Overlay</button> 
     <input type="range" min="0" max="1" step="0.01" value="1" id="overlayOpacity"> <br>
     Speed: <input type="range" id="speedSlider" min="1000" max="2000" value="2000" step="100" /><br>
@@ -939,6 +938,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  /*
   cameraFollowBtn.addEventListener("click", () => {
     cameraLockToAcc = !cameraLockToAcc;
     cameraFollowBtn.innerText = cameraLockToAcc ? "Unlock Camera" : "Lock Camera to Accumulator";
@@ -968,6 +968,7 @@ window.addEventListener('DOMContentLoaded', () => {
       orbit.update(); // refresh
     }
   });
+  */ 
     
   document.getElementById("toggleOverlayBtn").addEventListener("click", () => {
     if (!earthOverlayMesh) return;
